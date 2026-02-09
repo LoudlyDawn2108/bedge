@@ -108,6 +108,22 @@ function createTTSStore() {
     return sentences()[currentSentenceIdx()];
   }
   
+  // Find the index of the first sentence on a specific page
+  function getFirstSentenceIdxOnPage(pageNum: number): number {
+    const idx = sentences().findIndex(s => s.pageNum === pageNum);
+    return idx >= 0 ? idx : -1;
+  }
+  
+  // Jump to first sentence on a specific page
+  function goToPageSentence(pageNum: number): boolean {
+    const idx = getFirstSentenceIdxOnPage(pageNum);
+    if (idx >= 0) {
+      setCurrentSentenceIdx(idx);
+      return true;
+    }
+    return false;
+  }
+  
   return {
     sentences,
     currentSentenceIdx,
@@ -124,7 +140,9 @@ function createTTSStore() {
     clearSentences,
     nextSentence,
     prevSentence,
-    getCurrentSentence
+    getCurrentSentence,
+    getFirstSentenceIdxOnPage,
+    goToPageSentence
   };
 }
 

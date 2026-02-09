@@ -89,6 +89,24 @@ const App: Component = () => {
     } else {
       // Start
       playbackAbort = false;
+      
+      // Check if current sentence highlight is on the current visible page
+      const currentSentence = ttsStore.getCurrentSentence();
+      const currentVisiblePage = pdfStore.currentPage();
+      
+      // If no current sentence or current sentence is on a different page, 
+      // try to jump to first sentence on the visible page
+      if (!currentSentence || currentSentence.pageNum !== currentVisiblePage) {
+        // Only jump if there are sentences for the current page
+        const hasSentences = ttsStore.goToPageSentence(currentVisiblePage);
+        if (!hasSentences && !currentSentence) {
+          // No sentences for current page and no current sentence - nothing to play
+          console.log('No sentences available for current page');
+          return;
+        }
+        // If no sentences for target page but we have a current sentence, just continue from there
+      }
+      
       ttsStore.setIsPlaying(true);
       await runPlayback();
     }

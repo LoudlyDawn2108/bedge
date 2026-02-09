@@ -99,6 +99,9 @@ export const PDFViewer: Component<Props> = (props) => {
   // Scroll handler with throttle
   let scrollTimeout: number | null = null;
   function onScroll() {
+    // Track user scrolling for auto-scroll protection
+    handleUserScroll();
+    
     if (scrollTimeout) return;
     scrollTimeout = window.setTimeout(() => {
       loadVisiblePages();
@@ -124,7 +127,7 @@ export const PDFViewer: Component<Props> = (props) => {
       targetY += yInPage * pdfStore.zoomLevel();
     }
     
-    containerRef.scrollTo({ top: targetY, behavior: 'smooth' });
+    containerRef.scrollTo({ top: targetY, behavior: 'instant' });
   }
   
   // Re-render when zoom changes - use on() to explicitly track only zoomLevel
@@ -174,6 +177,68 @@ export const PDFViewer: Component<Props> = (props) => {
     if (scrollTimeout) clearTimeout(scrollTimeout);
   });
   
+  // Track if user is manually scrolling to avoid fighting with auto-scroll
+  const [userScrolling, setUserScrolling] = createSignal(false);
+  let userScrollTimeout: number | null = null;
+  
+  // Handle user scroll - mark as scrolling for brief period
+  function handleUserScroll() {
+    setUserScrolling(true);
+    if (userScrollTimeout) clearTimeout(userScrollTimeout);
+    userScrollTimeout = window.setTimeout(() => {
+      setUserScrolling(false);
+    }, 500); // 500ms cooldown after user stops scrolling
+  }
+  
+  // Helper to get Y offset for a page
+  function getPageTopY(pageNum: number): number {
+    const heights = pageHeights();
+    const defaultHeight = 800 * pdfStore.zoomLevel();
+    let y = 0;
+    for (let i = 0; i < pageNum; i++) {
+      y += heights[i] || defaultHeight;
+    }
+    return y;
+  }
+  
+  // Auto-scroll when current sentence changes during TTS playback
+  createEffect(on(
+    () => ttsStore.currentSentenceIdx(),
+    () => {
+      // Only auto-scroll when playing AND user isn't manually scrolling
+      if (!ttsStore.isPlaying()) return;
+      if (userScrolling()) return;
+      if (!containerRef) return;
+      
+      const sentence = ttsStore.getCurrentSentence();
+      if (!sentence || !sentence.words || sentence.words.length === 0) return;
+      
+      // Get container metrics
+      const containerHeight = containerRef.clientHeight;
+      const scrollTop = containerRef.scrollTop;
+      
+      // Calculate the Y position of the sentence in the scroll container
+      const pageTopY = getPageTopY(sentence.pageNum);
+      
+      // Sentence Y position (use first word's y0)
+      const sentenceY = pageTopY + sentence.words[0].y0;
+      
+      // Calculate where sentence appears relative to viewport
+      const sentenceViewportY = sentenceY - scrollTop;
+      
+      // If sentence is below 80% of container or above viewport, scroll it into view
+      // Target: scroll so sentence is at ~20% from top
+      const threshold = containerHeight * 0.8;
+      const targetPosition = containerHeight * 0.2;
+      
+      if (sentenceViewportY > threshold || sentenceViewportY < 0) {
+        const newScrollTop = sentenceY - targetPosition;
+        containerRef.scrollTo({ top: Math.max(0, newScrollTop), behavior: 'instant' });
+      }
+    },
+    { defer: true }
+  ));
+  
   // Get highlight style for current sentence
   function getHighlightStyle(pageNum: number): string {
     const sentence = ttsStore.getCurrentSentence();
@@ -204,24 +269,13 @@ export const PDFViewer: Component<Props> = (props) => {
       }
     }
     
-    // Return SVG highlight overlay - using SVG group with opacity
-    // This prevents color accumulation when boxes overlap
-    
-    // Adjust all lines for padding and generate rect elements
-    const rects = lines.map(line => {
-      const lineHeight = line.y1 - line.y0;
-      const topPadding = lineHeight * 0.1;
-      const descenderPadding = lineHeight * 0.35;
-      const leftPadding = 3; // Expand left to cover first character
-      const rightPadding = 3; // Keep existing right padding
-      const adjustedX0 = line.x0 - leftPadding;
-      const adjustedY0 = line.y0 + topPadding;
-      const adjustedWidth = line.x1 - line.x0 + leftPadding + rightPadding; // Expand both sides
-      const adjustedHeight = lineHeight - topPadding + descenderPadding;
-      return `<rect x="${adjustedX0}" y="${adjustedY0}" width="${adjustedWidth}" height="${adjustedHeight}" rx="2" fill="#ebff7a"/>`;
-    }).join('');
+    // Generate SVG rect elements - MuPDF provides accurate positions, no padding needed
+    const rects = lines.map(line => 
+      `<rect x="${line.x0}" y="${line.y0}" width="${line.x1 - line.x0}" height="${line.y1 - line.y0}" rx="2" fill="#ebff7a"/>`
+    ).join('');
     
     // Return SVG with solid fill rects inside a group with opacity
+    // This prevents color accumulation when boxes overlap
     return `<svg style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible;">
       <g opacity="0.33">${rects}</g>
     </svg>`;

@@ -116,78 +116,156 @@ export class PDFService {
   async getTextContent(pageNum: number, scale: number = 2.5): Promise<Word[]> {
     const page = this.getPage(pageNum);
     
-    // Get structured text with preserve-spans option
+    // Get structured text
     const stext = page.toStructuredText('preserve-spans');
-    const json: StructuredText = JSON.parse(stext.asJSON());
     
     const words: Word[] = [];
     
-    // Process blocks -> lines -> chars to extract words
-    for (const block of json.blocks) {
-      if (block.type !== 'text' || !block.lines) continue;
+    // Track current line's characters for grouping
+    let lineChars: Word[] = [];
+    
+    // Process a line's chars into words
+    const processLine = () => {
+      if (lineChars.length === 0) return;
       
-      for (const line of block.lines) {
-        if (!line.chars || line.chars.length === 0) continue;
+      let currentWord: Word | null = null;
+      
+      for (const char of lineChars) {
+        const isWhitespace = /\s/.test(char.text);
         
-        let currentWord = '';
-        let wordX0 = 0;
-        let wordY0 = 0;
-        let wordX1 = 0;
-        let wordY1 = 0;
-        let inWord = false;
-        
-        for (let i = 0; i < line.chars.length; i++) {
-          const char = line.chars[i];
-          const isWhitespace = /\s/.test(char.c);
-          
-          // Get char bounds from quad (quad has 8 values: 4 corner points)
-          // [x0,y0, x1,y1, x2,y2, x3,y3] - top-left, top-right, bottom-right, bottom-left
-          const charX0 = char.quad[0] * scale;
-          const charY0 = char.quad[1] * scale;
-          const charX1 = char.quad[2] * scale;
-          const charY1 = char.quad[5] * scale; // Use bottom-left Y for height
-          
-          if (isWhitespace) {
-            // End current word if we have one
-            if (inWord && currentWord.trim()) {
-              words.push({
-                text: currentWord,
-                x0: wordX0,
-                y0: wordY0,
-                x1: wordX1,
-                y1: wordY1
-              });
+        if (isWhitespace) {
+          if (currentWord && currentWord.text.trim()) {
+            // Ensure x1 >= x0 and y1 >= y0
+            if (currentWord.x1 < currentWord.x0) {
+              [currentWord.x0, currentWord.x1] = [currentWord.x1, currentWord.x0];
             }
-            currentWord = '';
-            inWord = false;
+            if (currentWord.y1 < currentWord.y0) {
+              [currentWord.y0, currentWord.y1] = [currentWord.y1, currentWord.y0];
+            }
+            words.push(currentWord);
+          }
+          currentWord = null;
+        } else {
+          if (!currentWord) {
+            currentWord = { ...char };
           } else {
-            if (!inWord) {
-              // Start new word
-              wordX0 = charX0;
-              wordY0 = charY0;
-              inWord = true;
-            }
-            currentWord += char.c;
-            wordX1 = charX1;
-            wordY1 = Math.max(wordY1, charY1);
-            wordY0 = Math.min(wordY0, charY0);
+            // Extend current word horizontally
+            currentWord.text += char.text;
+            currentWord.x0 = Math.min(currentWord.x0, char.x0);
+            currentWord.x1 = Math.max(currentWord.x1, char.x1);
+            currentWord.y0 = Math.min(currentWord.y0, char.y0);
+            currentWord.y1 = Math.max(currentWord.y1, char.y1);
           }
         }
-        
-        // Don't forget last word in line
-        if (inWord && currentWord.trim()) {
-          words.push({
-            text: currentWord,
-            x0: wordX0,
-            y0: wordY0,
-            x1: wordX1,
-            y1: wordY1
+      }
+      
+      // Add last word in line
+      if (currentWord && currentWord.text.trim()) {
+        if (currentWord.x1 < currentWord.x0) {
+          [currentWord.x0, currentWord.x1] = [currentWord.x1, currentWord.x0];
+        }
+        if (currentWord.y1 < currentWord.y0) {
+          [currentWord.y0, currentWord.y1] = [currentWord.y1, currentWord.y0];
+        }
+        words.push(currentWord);
+      }
+      
+      lineChars = [];
+    };
+    
+    // Try using walk method with line tracking
+    try {
+      stext.walk({
+        beginLine: () => {
+          // Start fresh for each line
+          lineChars = [];
+        },
+        endLine: () => {
+          // Process accumulated chars into words
+          processLine();
+        },
+        beginTextBlock: () => {},
+        endTextBlock: () => {},
+        onChar: (utf: string, _origin: [number, number], _font: any, _size: number, quad: number[]) => {
+          if (!utf || !quad || quad.length < 8) return;
+          
+          // quad: [ul.x, ul.y, ur.x, ur.y, ll.x, ll.y, lr.x, lr.y]
+          // Bounding box: x0=left, y0=top, x1=right, y1=bottom
+          lineChars.push({
+            text: utf,
+            x0: Math.min(quad[0], quad[4]) * scale, // left edge
+            y0: Math.min(quad[1], quad[3]) * scale, // top edge  
+            x1: Math.max(quad[2], quad[6]) * scale, // right edge
+            y1: Math.max(quad[5], quad[7]) * scale  // bottom edge
           });
+        }
+      });
+      
+      // Process any remaining line
+      processLine();
+
+    } catch (e) {
+      console.log('[MuPDF] walk failed, falling back to JSON parsing:', e);
+      
+      // Fallback to JSON-based extraction
+      const json: StructuredText = JSON.parse(stext.asJSON());
+      
+      for (const block of json.blocks) {
+        if (block.type !== 'text' || !block.lines) continue;
+        
+        for (const line of block.lines) {
+          const lineText = (line as any).text as string | undefined;
+          const lineBbox = (line as any).bbox as { x: number; y: number; w: number; h: number } | undefined;
+          
+          if (!lineText || !lineBbox) continue;
+          
+          const lineX0 = lineBbox.x * scale;
+          const lineY0 = lineBbox.y * scale;
+          const lineWidth = lineBbox.w * scale;
+          const lineHeight = lineBbox.h * scale;
+          
+          const lineWords = lineText.split(/\s+/).filter(w => w.trim());
+          if (lineWords.length === 0) continue;
+          
+          const avgCharWidth = lineWidth / lineText.length;
+          let currentX = lineX0;
+          
+          for (const word of lineWords) {
+            const wordWidth = word.length * avgCharWidth;
+            words.push({
+              text: word,
+              x0: currentX,
+              y0: lineY0,
+              x1: currentX + wordWidth,
+              y1: lineY0 + lineHeight
+            });
+            currentX += wordWidth + avgCharWidth;
+          }
         }
       }
     }
     
-    return words;
+    // merge two words if the distance between them is less than 1 pixel
+    const mergedWords: Word[] = [];
+
+    for (let i = 0; i < words.length; i++) {
+      if (words[i + 1].x0 - words[i].x1 < 1) {
+        mergedWords.push({
+          text: words[i].text + words[i + 1].text,
+          x0: words[i].x0,
+          y0: words[i].y0,
+          x1: words[i + 1].x1,
+          y1: words[i + 1].y1
+        });
+        i++;
+      } else {
+        mergedWords.push(words[i]);
+      }
+    }
+
+    console.log('Merged words:', mergedWords);
+    
+    return mergedWords;
   }
   
   async getTOC(): Promise<TOCItem[]> {
@@ -209,7 +287,6 @@ export class PDFService {
             try {
               // resolveLink returns different formats depending on the destination type
               const resolved = (this.doc as any).resolveLink(item.uri);
-              console.log('[MuPDF] resolveLink for', item.title, ':', item.uri, '->', resolved);
               if (resolved) {
                 // resolved can be "page,x,y" format or an object
                 if (typeof resolved === 'string') {
