@@ -9,6 +9,7 @@ export interface Word {
   y0: number;
   x1: number;
   y1: number;
+  blockId?: number;
 }
 
 export interface PDFPage {
@@ -123,6 +124,7 @@ export class PDFService {
     
     // Track current line's characters for grouping
     let lineChars: Word[] = [];
+    let currentBlockId = 0;
     
     // Process a line's chars into words
     const processLine = () => {
@@ -155,6 +157,7 @@ export class PDFService {
             currentWord.x1 = Math.max(currentWord.x1, char.x1);
             currentWord.y0 = Math.min(currentWord.y0, char.y0);
             currentWord.y1 = Math.max(currentWord.y1, char.y1);
+            // Keep the blockId of the first char (should be consistent within a word)
           }
         }
       }
@@ -184,7 +187,9 @@ export class PDFService {
           // Process accumulated chars into words
           processLine();
         },
-        beginTextBlock: () => {},
+        beginTextBlock: () => {
+          currentBlockId++;
+        },
         endTextBlock: () => {},
         onChar: (utf: string, _origin: [number, number], _font: any, _size: number, quad: number[]) => {
           if (!utf || !quad || quad.length < 8) return;
@@ -196,7 +201,8 @@ export class PDFService {
             x0: Math.min(quad[0], quad[4]) * scale, // left edge
             y0: Math.min(quad[1], quad[3]) * scale, // top edge  
             x1: Math.max(quad[2], quad[6]) * scale, // right edge
-            y1: Math.max(quad[5], quad[7]) * scale  // bottom edge
+            y1: Math.max(quad[5], quad[7]) * scale,  // bottom edge
+            blockId: currentBlockId
           });
         }
       });
@@ -210,7 +216,9 @@ export class PDFService {
       // Fallback to JSON-based extraction
       const json: StructuredText = JSON.parse(stext.asJSON());
       
+      let blockIdCounter = 0;
       for (const block of json.blocks) {
+        blockIdCounter++;
         if (block.type !== 'text' || !block.lines) continue;
         
         for (const line of block.lines) {
@@ -237,7 +245,8 @@ export class PDFService {
               x0: currentX,
               y0: lineY0,
               x1: currentX + wordWidth,
-              y1: lineY0 + lineHeight
+              y1: lineY0 + lineHeight,
+              blockId: blockIdCounter
             });
             currentX += wordWidth + avgCharWidth;
           }
@@ -245,27 +254,57 @@ export class PDFService {
       }
     }
     
-    // merge two words if the distance between them is less than 1 pixel
-    const mergedWords: Word[] = [];
+    // Post-processing: Merge split words
+    // Sometimes mupdf's walk endLine triggers prematurely, splitting words
+    // We merge words that are:
+    // 1. On the same line (vertical overlap / alignment)
+    // 2. Very close to each other horizontally
+    
+    if (words.length > 0) {
+      const mergedWords: Word[] = [];
+      let currentWord = words[0];
 
-    for (let i = 0; i < words.length; i++) {
-      if (words[i + 1].x0 - words[i].x1 < 1) {
-        mergedWords.push({
-          text: words[i].text + words[i + 1].text,
-          x0: words[i].x0,
-          y0: words[i].y0,
-          x1: words[i + 1].x1,
-          y1: words[i + 1].y1
-        });
-        i++;
-      } else {
-        mergedWords.push(words[i]);
+      for (let i = 1; i < words.length; i++) {
+        const nextWord = words[i];
+
+        // Check vertical alignment (same line)
+        // We use y1 (bottom/baseline) for alignment check, allowing some variance
+        // If the bottom of the words are roughly aligned, they are on the same line
+        const yDiff = Math.abs(currentWord.y1 - nextWord.y1);
+        const charHeight = currentWord.y1 - currentWord.y0;
+        // Allow 50% height variance for misalignment (e.g. different font sizes or slight offsets)
+        const isSameLine = yDiff < (charHeight * 0.5); 
+
+        // Check horizontal distance
+        // Words split by endLine should be very close to each other (almost touching)
+        // x0 is left, x1 is right. Distance is next.left - current.right
+        const dist = nextWord.x0 - currentWord.x1;
+        
+        // Use a small tolerance (e.g., 1% of character width or fixed small pixel value)
+        // Here we use a fixed small value because split words are usually adjacent
+        const isAdjacent = dist < (currentWord.y1 - currentWord.y0) * 0.01; // 1% of height as proxy for char width spacing
+
+        // Check if blockIds match (or are undefined)
+        const isSameBlock = currentWord.blockId === nextWord.blockId;
+
+        if (isSameLine && isAdjacent && isSameBlock) {
+          // Merge
+          currentWord.text += nextWord.text;
+          // Update bounding box
+          currentWord.x1 = Math.max(currentWord.x1, nextWord.x1); // Extend right
+          currentWord.y0 = Math.min(currentWord.y0, nextWord.y0); // Expand top if needed
+          currentWord.y1 = Math.max(currentWord.y1, nextWord.y1); // Expand bottom if needed
+        } else {
+          mergedWords.push(currentWord);
+          currentWord = nextWord; // Move to next
+        }
       }
+      mergedWords.push(currentWord);
+      if (pageNum == 4) console.log(mergedWords);
+      return mergedWords;
     }
 
-    console.log('Merged words:', mergedWords);
-    
-    return mergedWords;
+    return words;
   }
   
   async getTOC(): Promise<TOCItem[]> {

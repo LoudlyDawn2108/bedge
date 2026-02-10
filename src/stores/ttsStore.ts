@@ -47,6 +47,17 @@ function createTTSStore() {
     let currentText: string[] = [];
     
     for (const word of filteredWords) {
+      // Check for block change - force sentence break
+      if (currentWords.length > 0 && word.blockId !== undefined && currentWords[0].blockId !== undefined && word.blockId !== currentWords[0].blockId) {
+         newSentences.push({
+          text: currentText.join(' '),
+          words: [...currentWords],
+          pageNum
+        });
+        currentWords = [];
+        currentText = [];
+      }
+
       currentWords.push(word);
       currentText.push(word.text);
       
