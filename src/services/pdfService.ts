@@ -300,7 +300,48 @@ export class PDFService {
         }
       }
       mergedWords.push(currentWord);
-      if (pageNum == 4) console.log(mergedWords);
+      
+      // Second Post-processing pass: Dehyphenation
+      // Merge words ending with hyphen that continue on next line
+      const dehyphenatedWords: Word[] = [];
+      if (mergedWords.length > 0) {
+        let currentWord = mergedWords[0];
+        // Matches standard hyphen, soft hyphen, non-breaking hyphen, figure dash, en dash, em dash, minus sign
+        const HYPHEN_REGEX = /[-\u00AD\u2010\u2011\u002D\u2012\u2013\u2014\u2212]$/;
+
+        for (let i = 1; i < mergedWords.length; i++) {
+          const nextWord = mergedWords[i];
+          
+          // Check if current word ends with hyphen
+          if (HYPHEN_REGEX.test(currentWord.text)) {
+            // Check if next word is in same block
+            const isSameBlock = currentWord.blockId === nextWord.blockId;
+            
+            // Check if next word is effectively on a subsequent line
+            // (y0 of next word should be greater than y0 of current word)
+            const isNextLine = nextWord.y0 > currentWord.y0;
+
+            if (isSameBlock && isNextLine) {
+              // Remove hyphen and merge text to the first word
+              currentWord.text = currentWord.text.replace(HYPHEN_REGEX, '') + nextWord.text;
+              
+              // Clear text of the second word (phantom word)
+              // This preserves its bounding box for highlighting but it won't be read by TTS (if handled correctly)
+              nextWord.text = "";
+              
+              // Do NOT merge coordinates. Keep them as separate words.
+              // Do NOT skip nextWord. Let it be added to the list.
+            }
+          }
+          
+          dehyphenatedWords.push(currentWord);
+          currentWord = nextWord;
+        }
+        dehyphenatedWords.push(currentWord);
+        
+        return dehyphenatedWords;
+      }
+      
       return mergedWords;
     }
 
