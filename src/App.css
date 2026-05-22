@@ -35,6 +35,16 @@ button:active {
   background: #606060;
 }
 
+.sidebar .toc-item {
+  background: transparent;
+}
+
+@media (hover: hover) {
+  .sidebar .toc-item:hover {
+    background: #3d3d3d;
+  }
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 10px;

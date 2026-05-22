@@ -1,170 +1,273 @@
-import { Show, createSignal } from 'solid-js';
+import { Show, createSignal, createEffect, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Toolbar } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { PDFViewer } from './components/PDFViewer';
-import { pdfService } from './services/pdfService';
+import { LibraryModal } from './components/LibraryModal';
+import { documentSession } from './services/documentSession';
 import { ttsService } from './services/ttsService';
 import { pdfStore } from './stores/pdfStore';
-import { ttsStore } from './stores/ttsStore';
-import { db, addBook, getBookByPath, updateBook, type Book } from './services/db';
+import { readingSession } from './stores/readingSessionStore';
+import { playbackController } from './controllers/playbackController';
+import { addBook, deleteBook, getBookByPath, updateBook, getAllBooks, removeLegacyPdfBlobs, type Book, type StoredPDFFileHandle } from './services/db';
 import './App.css';
+
+interface PDFOpenFilePickerOptions {
+  multiple?: boolean;
+  types?: Array<{
+    description?: string;
+    accept: Record<string, string[]>;
+  }>;
+  excludeAcceptAllOption?: boolean;
+}
+
+interface WindowWithPDFFilePicker extends Window {
+  showOpenFilePicker?: (options?: PDFOpenFilePickerOptions) => Promise<StoredPDFFileHandle[]>;
+}
+
+const pdfPickerOptions: PDFOpenFilePickerOptions = {
+  multiple: false,
+  types: [
+    {
+      description: 'PDF files',
+      accept: { 'application/pdf': ['.pdf'] },
+    },
+  ],
+};
+
+function getBookTitle(fileName: string): string {
+  return fileName.replace(/\.pdf$/i, '');
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'NotFoundError';
+}
 
 const App: Component = () => {
   const [showLibrary, setShowLibrary] = createSignal(false);
   let fileInputRef: HTMLInputElement | undefined;
-  let viewerRef: any;
-  
-  // Open file dialog
-  function openFileDialog() {
+
+  async function openFileDialog() {
+    const openFilePicker = (window as WindowWithPDFFilePicker).showOpenFilePicker;
+    if (openFilePicker) {
+      try {
+        const [fileHandle] = await openFilePicker.call(window, pdfPickerOptions);
+        if (!fileHandle) return;
+
+        const file = await fileHandle.getFile();
+        await openBook(file, {
+          path: file.name,
+          title: getBookTitle(file.name),
+          fileHandle,
+        });
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error('Failed to open PDF from file picker:', error);
+        alert('Failed to open PDF: ' + (error as Error).message);
+      }
+      return;
+    }
+
     fileInputRef?.click();
   }
-  
-  // Handle file selection
-  async function handleFileSelect(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    
+
+  async function openBook(source: File | Blob, bookMeta: { path: string; title: string; fileHandle?: StoredPDFFileHandle }) {
     try {
-      // Load PDF
-      await pdfService.loadFromFile(file);
-      pdfStore.setTotalPages(pdfService.numPages);
+      playbackController.stop();
+      await documentSession.open(source);
+      pdfStore.setTotalPages(documentSession.numPages);
+      pdfStore.setCurrentViewportPosition(0, 0);
+      pdfStore.clearNavigation();
       pdfStore.clearLoadedPages();
-      ttsStore.clearSentences();
-      
-      // Load TOC
-      const toc = await pdfService.getTOC();
+      readingSession.resetDocumentState();
+
+      documentSession.onPageTextReady = (pageNum, words, dims) => {
+        readingSession.addPageSentences(pageNum, words, dims.height, dims.width, pdfStore.zoomLevel());
+      };
+
+      const toc = await documentSession.getTOC();
       pdfStore.setTOC(toc);
-      
-      // Check if book exists in DB
-      let book = await getBookByPath(file.name);
+
+      let book = await getBookByPath(bookMeta.path);
       if (!book) {
-        // Add new book
         const id = await addBook({
-          path: file.name,
-          title: file.name.replace('.pdf', ''),
-          totalPages: pdfService.numPages,
+          path: bookMeta.path,
+          title: bookMeta.title,
+          totalPages: documentSession.numPages,
           lastPage: 0,
+          lastPageOffsetY: 0,
           lastSentence: 0,
           zoomLevel: 2.5,
           headerMargin: 50,
           footerMargin: 60,
           columnMode: 1,
           lastOpened: Date.now(),
-          pdfBlob: file
+          fileHandle: bookMeta.fileHandle,
         });
-        book = await db.books.get(id);
+        book = await getAllBooks().then(books => books.find(b => b.id === id));
       } else {
-        // Update last opened
-        await updateBook(book.id!, { lastOpened: Date.now() });
+        const updates: Partial<Book> = { lastOpened: Date.now() };
+        if (bookMeta.fileHandle) {
+          updates.fileHandle = bookMeta.fileHandle;
+        }
+        await updateBook(book.id!, updates);
+        book = { ...book, ...updates };
       }
-      
+
       if (book) {
         pdfStore.setCurrentBook(book);
         pdfStore.setZoomLevel(book.zoomLevel);
-        ttsStore.setHeaderMargin(book.headerMargin);
-        ttsStore.setFooterMargin(book.footerMargin);
-        ttsStore.setColumnMode(book.columnMode);
+        readingSession.setHeaderMargin(book.headerMargin);
+        readingSession.setFooterMargin(book.footerMargin);
+        readingSession.setColumnMode(book.columnMode);
+
+        const maxPage = Math.max(0, documentSession.numPages - 1);
+        const restoredPage = Math.max(0, Math.min(book.lastPage, maxPage));
+        const restoredOffsetY = Math.max(0, book.lastPageOffsetY ?? 0);
+        const restoredSentence = Math.max(0, book.lastSentence);
+
+        readingSession.goToSentence(restoredPage, restoredSentence);
+        pdfStore.goToPage(restoredPage, restoredOffsetY);
       }
-      
+
     } catch (err) {
       console.error('Failed to load PDF:', err);
       alert('Failed to load PDF: ' + (err as Error).message);
     }
-    
-    // Reset input
+  }
+
+  async function handleFileSelect(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    await openBook(file, { path: file.name, title: getBookTitle(file.name) });
     input.value = '';
   }
-  
-  // TTS Playback
-  let playbackAbort = false;
-  
-  async function togglePlay() {
-    if (ttsStore.isPlaying()) {
-      // Stop
-      playbackAbort = true;
-      ttsService.stop();
-      ttsStore.setIsPlaying(false);
-    } else {
-      // Start
-      playbackAbort = false;
-      
-      // Check if current sentence highlight is on the current visible page
-      const currentSentence = ttsStore.getCurrentSentence();
-      const currentVisiblePage = pdfStore.currentPage();
-      
-      // If no current sentence or current sentence is on a different page, 
-      // try to jump to first sentence on the visible page
-      if (!currentSentence || currentSentence.pageNum !== currentVisiblePage) {
-        // Only jump if there are sentences for the current page
-        const hasSentences = ttsStore.goToPageSentence(currentVisiblePage);
-        if (!hasSentences && !currentSentence) {
-          // No sentences for current page and no current sentence - nothing to play
-          console.log('No sentences available for current page');
+
+  async function handleLibrarySelect(book: Book) {
+    setShowLibrary(false);
+    if (!book.fileHandle) {
+      if (book.id !== undefined) await deleteBook(book.id);
+      alert('This library entry has no saved file permission. Please reopen the PDF from disk. The stale entry was removed.');
+      return;
+    }
+
+    try {
+      const permission = await book.fileHandle.queryPermission?.({ mode: 'read' });
+      if (permission !== 'granted') {
+        const requestedPermission = await book.fileHandle.requestPermission?.({ mode: 'read' });
+        if (requestedPermission !== 'granted') {
+          alert('Permission to reopen this PDF was not granted. The library entry was kept.');
           return;
         }
-        // If no sentences for target page but we have a current sentence, just continue from there
       }
-      
-      ttsStore.setIsPlaying(true);
-      await runPlayback();
-    }
-  }
-  
-  async function runPlayback() {
-    const sentences = ttsStore.sentences();
-    
-    while (ttsStore.currentSentenceIdx() < sentences.length && !playbackAbort) {
-      const sentence = ttsStore.getCurrentSentence();
-      if (!sentence) break;
-      
-      try {
-        // Speak the sentence using Web Speech API
-        await ttsService.speak(sentence.text);
-        
-        if (playbackAbort) break;
-        
-        // Move to next sentence
-        ttsStore.nextSentence();
-        
-      } catch (err) {
-        const errorMessage = (err as Error).message;
-        // Ignore 'interrupted' errors - these happen when user presses stop/next/prev
-        if (errorMessage.includes('interrupted') || errorMessage.includes('canceled')) {
-          break;
-        }
-        console.error('TTS Error:', err);
-        alert('TTS Error: ' + errorMessage);
-        break;
+
+      const file = await book.fileHandle.getFile();
+      await openBook(file, { path: book.path, title: book.title, fileHandle: book.fileHandle });
+    } catch (error) {
+      if (isMissingFileError(error) && book.id !== undefined) {
+        await deleteBook(book.id);
+        alert('This PDF could not be found anymore, so it was removed from the library.');
+        return;
       }
+
+      console.error('Failed to reopen PDF from library:', error);
+      alert('Failed to reopen PDF: ' + (error as Error).message);
     }
-    
-    ttsStore.setIsPlaying(false);
   }
-  
-  function handlePrev() {
-    if (ttsStore.isPlaying()) {
-      playbackAbort = true;
-      ttsService.stop();
-      ttsStore.setIsPlaying(false);
-    }
-    ttsStore.prevSentence();
-  }
-  
-  function handleNext() {
-    if (ttsStore.isPlaying()) {
-      playbackAbort = true;
-      ttsService.stop();
-      ttsStore.setIsPlaying(false);
-    }
-    ttsStore.nextSentence();
-  }
-  
+
   function handleTOCSelect(pageNum: number, y?: number) {
     pdfStore.goToPage(pageNum, y);
   }
-  
+
+  let persistTimer: number | undefined;
+
+  onMount(() => {
+    void removeLegacyPdfBlobs().catch(error => {
+      console.error('Failed to remove legacy PDF blobs:', error);
+    });
+  });
+
+  async function saveProgressNow(): Promise<void> {
+    const book = pdfStore.currentBook();
+    if (!book?.id) return;
+
+    const c = readingSession.cursor();
+    const currentPage = pdfStore.currentPage();
+    const persistedSentence = c.pageNum === currentPage ? c.sentenceIndex : 0;
+
+    await updateBook(book.id, {
+      lastPage: currentPage,
+      lastPageOffsetY: pdfStore.currentPageOffsetY(),
+      lastSentence: persistedSentence,
+      zoomLevel: pdfStore.zoomLevel(),
+      headerMargin: readingSession.headerMargin(),
+      footerMargin: readingSession.footerMargin(),
+      columnMode: readingSession.columnMode(),
+    });
+  }
+
+  createEffect(() => {
+    const book = pdfStore.currentBook();
+    const zoom = pdfStore.zoomLevel();
+    const headerMargin = readingSession.headerMargin();
+    const footerMargin = readingSession.footerMargin();
+    const columnMode = readingSession.columnMode();
+
+    if (!book) {
+      ttsService.clear();
+      return;
+    }
+
+    ttsService.setContext({
+      documentKey: String(book.id ?? book.path),
+      layoutKey: `${columnMode}|${headerMargin}|${footerMargin}|${zoom}`,
+    });
+  });
+
+  createEffect(() => {
+    readingSession.cursor();
+    pdfStore.currentPage();
+    pdfStore.currentPageOffsetY();
+    pdfStore.zoomLevel();
+    readingSession.headerMargin();
+    readingSession.footerMargin();
+    readingSession.columnMode();
+
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(async () => {
+      await saveProgressNow();
+    }, 2000);
+  });
+
+  createEffect(() => {
+    const flushProgress = () => {
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = undefined;
+      }
+      void saveProgressNow();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushProgress();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', flushProgress);
+    window.addEventListener('beforeunload', flushProgress);
+
+    onCleanup(() => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', flushProgress);
+      window.removeEventListener('beforeunload', flushProgress);
+    });
+  });
+
   return (
     <div class="app" style={{
       display: 'flex',
@@ -172,27 +275,30 @@ const App: Component = () => {
       height: '100vh',
       background: '#1e1e1e'
     }}>
-      {/* Hidden file input */}
-      <input 
+      <input
         ref={fileInputRef}
-        type="file" 
+        type="file"
         accept="application/pdf"
         style={{ display: 'none' }}
         onChange={handleFileSelect}
       />
-      
-      <Toolbar 
+
+      <Show when={showLibrary()}>
+        <LibraryModal onSelect={handleLibrarySelect} onClose={() => setShowLibrary(false)} />
+      </Show>
+
+      <Toolbar
         onOpenFile={openFileDialog}
         onOpenLibrary={() => setShowLibrary(true)}
-        onPlay={togglePlay}
-        onPrev={handlePrev}
-        onNext={handleNext}
+        onPlay={() => playbackController.toggle()}
+        onPrev={() => playbackController.prev()}
+        onNext={() => playbackController.next()}
       />
-      
+
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <Sidebar onSelectItem={handleTOCSelect} />
-        
-        <Show 
+
+        <Show
           when={pdfStore.totalPages() > 0}
           fallback={
             <div style={{
@@ -206,8 +312,8 @@ const App: Component = () => {
             }}>
               <div style={{ 'font-size': '48px' }}>📄</div>
               <div>Open a PDF to start reading</div>
-              <button onClick={openFileDialog} style={{ 
-                padding: '12px 24px', 
+              <button onClick={openFileDialog} style={{
+                padding: '12px 24px',
                 'font-size': '16px',
                 background: '#4CAF50',
                 color: 'white',
@@ -220,7 +326,7 @@ const App: Component = () => {
             </div>
           }
         >
-          <PDFViewer ref={viewerRef} />
+          <PDFViewer />
         </Show>
       </div>
     </div>

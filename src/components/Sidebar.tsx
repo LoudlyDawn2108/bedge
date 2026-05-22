@@ -1,7 +1,6 @@
 import { For, Show } from 'solid-js';
 import type { Component } from 'solid-js';
 import { pdfStore } from '../stores/pdfStore';
-import type { TOCItem } from '../services/pdfService';
 
 interface Props {
   onSelectItem: (pageNum: number, y?: number) => void;
@@ -24,7 +23,8 @@ export const Sidebar: Component<Props> = (props) => {
         <div style={{ padding: '8px' }}>
           <For each={pdfStore.toc()}>
             {(item) => (
-              <div 
+              <div
+                class="toc-item"
                 onClick={() => props.onSelectItem(item.pageNum, item.y)}
                 style={{
                   padding: '8px 12px',
@@ -37,8 +37,6 @@ export const Sidebar: Component<Props> = (props) => {
                   overflow: 'hidden',
                   'text-overflow': 'ellipsis'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#3d3d3d'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 {item.title}
               </div>

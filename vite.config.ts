@@ -4,6 +4,12 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 
 export default defineConfig({
   plugins: [solid(), basicSsl()],
+  worker: {
+    format: 'es'
+  },
+  build: {
+    target: 'esnext'
+  },
   optimizeDeps: {
     exclude: ['mupdf']
   },

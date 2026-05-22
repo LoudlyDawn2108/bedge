@@ -1,6 +1,6 @@
 import type { Component } from 'solid-js';
 import { pdfStore } from '../stores/pdfStore';
-import { ttsStore } from '../stores/ttsStore';
+import { readingSession } from '../stores/readingSessionStore';
 
 interface Props {
   onOpenFile: () => void;
@@ -26,8 +26,8 @@ export const Toolbar: Component<Props> = (props) => {
       <button onClick={pdfStore.toggleSidebar}>☰ TOC</button>
       
       {/* Column mode toggle */}
-      <button onClick={() => ttsStore.setColumnMode(ttsStore.columnMode() === 1 ? 2 : 1)}>
-        {ttsStore.columnMode() === 1 ? '📄 1-Col' : '📑 2-Col'}
+      <button onClick={() => readingSession.setColumnMode(readingSession.columnMode() === 1 ? 2 : 1)}>
+        {readingSession.columnMode() === 1 ? '📄 1-Col' : '📑 2-Col'}
       </button>
       
       {/* Spacer */}
@@ -55,11 +55,11 @@ export const Toolbar: Component<Props> = (props) => {
       <button 
         onClick={props.onPlay}
         style={{ 
-          background: ttsStore.isPlaying() ? '#ff4444' : '#4CAF50',
+          background: readingSession.isPlaying() ? '#ff4444' : '#4CAF50',
           color: 'white'
         }}
       >
-        {ttsStore.isPlaying() ? '⏸ Pause' : '▶ Play'}
+        {readingSession.isPlaying() ? '⏸ Pause' : '▶ Play'}
       </button>
     </div>
   );

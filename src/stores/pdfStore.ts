@@ -1,5 +1,5 @@
-import { createSignal, createRoot } from 'solid-js';
-import type { TOCItem } from '../services/pdfService';
+import { batch, createSignal, createRoot } from 'solid-js';
+import type { TOCItem } from '../pdf/types';
 import type { Book } from '../services/db';
 
 function createPDFStore() {
@@ -7,6 +7,7 @@ function createPDFStore() {
   const [currentBook, setCurrentBook] = createSignal<Book | null>(null);
   const [totalPages, setTotalPages] = createSignal(0);
   const [currentPage, setCurrentPage] = createSignal(0);
+  const [currentPageOffsetY, setCurrentPageOffsetY] = createSignal(0);
   const [zoomLevel, setZoomLevel] = createSignal(2.5);
   const [brightness, setBrightness] = createSignal(1.0);
   
@@ -22,6 +23,15 @@ function createPDFStore() {
   
   function addLoadedPage(pageNum: number) {
     setLoadedPages(prev => new Set([...prev, pageNum]));
+  }
+
+  function removeLoadedPage(pageNum: number) {
+    setLoadedPages(prev => {
+      if (!prev.has(pageNum)) return prev;
+      const next = new Set(prev);
+      next.delete(pageNum);
+      return next;
+    });
   }
   
   function clearLoadedPages() {
@@ -49,9 +59,19 @@ function createPDFStore() {
   
   // Request navigation to a page (for TOC clicks, etc.)
   function goToPage(pageNum: number, y?: number) {
-    setNavigateToPage(pageNum);
-    setNavigateY(y);
-    setCurrentPage(pageNum);
+    batch(() => {
+      setNavigateToPage(pageNum);
+      setNavigateY(y);
+      setCurrentPage(pageNum);
+      setCurrentPageOffsetY(y ?? 0);
+    });
+  }
+
+  function setCurrentViewportPosition(pageNum: number, offsetY: number) {
+    batch(() => {
+      setCurrentPage(pageNum);
+      setCurrentPageOffsetY(offsetY);
+    });
   }
   
   // Clear navigation request (called after scroll completes)
@@ -67,6 +87,9 @@ function createPDFStore() {
     setTotalPages,
     currentPage,
     setCurrentPage,
+    currentPageOffsetY,
+    setCurrentPageOffsetY,
+    setCurrentViewportPosition,
     zoomLevel,
     setZoomLevel,
     brightness,
@@ -78,6 +101,7 @@ function createPDFStore() {
     toggleSidebar,
     loadedPages,
     addLoadedPage,
+    removeLoadedPage,
     clearLoadedPages,
     isPageLoaded,
     zoomIn,
@@ -91,4 +115,3 @@ function createPDFStore() {
 
 // Create singleton store
 export const pdfStore = createRoot(createPDFStore);
-
