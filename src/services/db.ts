@@ -33,7 +33,7 @@ export interface Setting {
 }
 
 // Database class
-class PDFestDB extends Dexie {
+class BedgeDB extends Dexie {
   books!: EntityTable<Book, 'id'>;
   settings!: EntityTable<Setting, 'key'>;
 
@@ -47,7 +47,7 @@ class PDFestDB extends Dexie {
   }
 }
 
-export const db = new PDFestDB();
+export const db = new BedgeDB();
 
 // Helper functions
 export async function addBook(book: Omit<Book, 'id'>): Promise<number> {

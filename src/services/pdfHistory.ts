@@ -4,14 +4,14 @@ export interface PDFHistoryLocation {
 }
 
 interface PDFHistoryState extends PDFHistoryLocation {
-  app: 'pdfest';
+  app: 'bedge';
   version: 1;
   type: 'pdf-location';
   docSessionId: string;
   index: number;
 }
 
-const APP_MARKER = 'pdfest';
+const APP_MARKER = 'bedge';
 const STATE_VERSION = 1;
 
 function hasHistory(): boolean {
