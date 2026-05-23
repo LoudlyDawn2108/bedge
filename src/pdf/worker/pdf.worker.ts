@@ -55,6 +55,10 @@ async function handleRequest(request: PdfWorkerRequest): Promise<void> {
         postSuccess(request.id, engine.getPageText(request.documentId, request.pageNum));
         break;
       }
+      case 'getPageLinks': {
+        postSuccess(request.id, engine.getPageLinks(request.documentId, request.pageNum));
+        break;
+      }
       case 'getPageMetrics': {
         postSuccess(request.id, engine.getPageMetrics(request.documentId, request.pageNum));
         break;

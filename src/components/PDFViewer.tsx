@@ -1,13 +1,16 @@
 import { For, Show, createSignal, createMemo, onMount, onCleanup, createEffect, on } from 'solid-js';
 import type { Component } from 'solid-js';
 import { documentSession } from '../services/documentSession';
+import { openSafeExternalLink } from '../services/externalLinks';
 import { pdfStore } from '../stores/pdfStore';
 import { readingSession } from '../stores/readingSessionStore';
+import { playbackController } from '../controllers/playbackController';
 import type { PageDims } from '../services/documentSession';
-import type { PageBounds, PDFQuad, Word } from '../pdf/types';
+import type { PageBounds, PDFLink, PDFQuad, Word } from '../pdf/types';
 
 interface Props {
   onPageChange?: (page: number) => void;
+  shortcutsEnabled?: boolean;
 }
 
 interface RenderedPageSize {
@@ -27,6 +30,13 @@ interface RenderJob {
   epoch: number;
   canvas: HTMLCanvasElement;
   jobId: number;
+}
+
+interface InitialRevealGate {
+  epoch: number;
+  hidden: boolean;
+  targetPageNum: number | null;
+  targetY?: number;
 }
 
 interface PageSelectionState {
@@ -52,8 +62,14 @@ export const PDFViewer: Component<Props> = (props) => {
   const [viewport, setViewport] = createSignal({ scrollTop: 0, viewHeight: 0 });
   const [selection, setSelection] = createSignal<PageSelectionState | null>(null);
   const [hoverCursorPage, setHoverCursorPage] = createSignal<number | null>(null);
+  const [pageLinks, setPageLinks] = createSignal<Record<number, PDFLink[]>>({});
   const renderingPages: Map<number, RenderJob> = new Map();
   let renderEpoch = 0;
+  const [initialRevealGate, setInitialRevealGate] = createSignal<InitialRevealGate>({
+    epoch: renderEpoch,
+    hidden: true,
+    targetPageNum: null,
+  });
   let nextRenderJobId = 0;
   let activeDragSelection: ActiveDragSelection | null = null;
   let pendingSelectionFrame: number | null = null;
@@ -61,10 +77,91 @@ export const PDFViewer: Component<Props> = (props) => {
   let pendingHoverPage: number | null = null;
   let pendingHoverClientX = 0;
   let pendingHoverClientY = 0;
+  let initialRevealTimeout: number | null = null;
+  let initialRevealFrame: number | null = null;
 
   const PAGE_GAP = 20;
   const VIEWER_PADDING = 20;
   const PAGES_PER_BATCH = 5;
+  const INITIAL_REVEAL_FAIL_OPEN_MS = 5000;
+  const KEYBOARD_TAP_SCROLL_STEP = 40;
+  const KEYBOARD_HOLD_SCROLL_SPEED = 1100;
+  const MAX_KEYBOARD_SCROLL_DT = 0.05;
+
+  function clearInitialRevealTimers() {
+    if (initialRevealTimeout !== null) {
+      window.clearTimeout(initialRevealTimeout);
+      initialRevealTimeout = null;
+    }
+
+    if (initialRevealFrame !== null) {
+      window.cancelAnimationFrame(initialRevealFrame);
+      initialRevealFrame = null;
+    }
+  }
+
+  function isInitialRevealHidden(): boolean {
+    const gate = initialRevealGate();
+    return gate.hidden && gate.epoch === renderEpoch;
+  }
+
+  function startInitialRevealGate(epoch: number, targetPageNum: number | null = null, targetY?: number) {
+    clearInitialRevealTimers();
+    setInitialRevealGate({ epoch, hidden: true, targetPageNum, targetY });
+
+    initialRevealTimeout = window.setTimeout(() => {
+      initialRevealTimeout = null;
+      if (renderEpoch !== epoch) return;
+      setInitialRevealGate(current => current.epoch === epoch ? { ...current, hidden: false } : current);
+    }, INITIAL_REVEAL_FAIL_OPEN_MS);
+  }
+
+  function captureInitialRevealTarget(pageNum: number, targetY?: number) {
+    let shouldCheckLoaded = false;
+
+    setInitialRevealGate(current => {
+      if (!current.hidden || current.epoch !== renderEpoch || current.targetPageNum !== null) return current;
+      shouldCheckLoaded = true;
+      return { ...current, targetPageNum: pageNum, targetY };
+    });
+
+    if (shouldCheckLoaded && pdfStore.isPageLoaded(pageNum)) {
+      completeInitialReveal(pageNum, renderEpoch);
+    }
+  }
+
+  function getPendingNavigationTarget(): { pageNum: number; y?: number } | null {
+    const pendingPage = pdfStore.navigateToPage();
+    if (pendingPage !== null) {
+      return { pageNum: pendingPage, y: pdfStore.navigateY() };
+    }
+
+    if (pdfStore.totalPages() <= 0) return null;
+    return { pageNum: pdfStore.currentPage(), y: pdfStore.currentPageOffsetY() };
+  }
+
+  function completeInitialReveal(pageNum: number, epoch: number) {
+    const gate = initialRevealGate();
+    if (!gate.hidden || gate.epoch !== epoch || gate.targetPageNum !== pageNum) return;
+
+    scrollToPage(pageNum, gate.targetY);
+
+    if (initialRevealTimeout !== null) {
+      window.clearTimeout(initialRevealTimeout);
+      initialRevealTimeout = null;
+    }
+
+    if (initialRevealFrame !== null) {
+      window.cancelAnimationFrame(initialRevealFrame);
+    }
+
+    initialRevealFrame = window.requestAnimationFrame(() => {
+      initialRevealFrame = null;
+      if (renderEpoch !== epoch) return;
+      setInitialRevealGate(current => current.epoch === epoch ? { ...current, hidden: false } : current);
+      syncViewport();
+    });
+  }
 
   function getEstimatedPageHeight(): number {
     const dims = estimatedPageDims();
@@ -120,9 +217,13 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function resetViewerState(options?: { resetScroll?: boolean; preserveSelection?: boolean }): number {
+    const previousGate = initialRevealGate();
+    const shouldCarryInitialRevealGate = previousGate.hidden && previousGate.epoch === renderEpoch;
+
     renderEpoch += 1;
     renderingPages.clear();
     setPageSizes([]);
+    setPageLinks({});
     pdfStore.clearLoadedPages();
     cancelSelectionInteraction();
 
@@ -131,6 +232,15 @@ export const PDFViewer: Component<Props> = (props) => {
     }
 
     clearHoverCursor();
+
+    if (options?.resetScroll || shouldCarryInitialRevealGate) {
+      const pendingTarget = options?.resetScroll && !shouldCarryInitialRevealGate ? getPendingNavigationTarget() : null;
+      startInitialRevealGate(
+        renderEpoch,
+        shouldCarryInitialRevealGate ? previousGate.targetPageNum : pendingTarget?.pageNum ?? null,
+        shouldCarryInitialRevealGate ? previousGate.targetY : pendingTarget?.y
+      );
+    }
 
     if (options?.resetScroll && containerRef) {
       containerRef.scrollTo({ top: 0, behavior: 'auto' });
@@ -151,6 +261,26 @@ export const PDFViewer: Component<Props> = (props) => {
       console.error(`Failed to get page bounds for page ${pageNum}:`, error);
     });
     return null;
+  }
+
+  function getPageLinks(pageNum: number): PDFLink[] {
+    return pageLinks()[pageNum] ?? documentSession.peekPageLinks(pageNum) ?? [];
+  }
+
+  function loadPageLinks(pageNum: number, epoch = renderEpoch): void {
+    if (pageLinks()[pageNum]) return;
+
+    void documentSession.getPageLinks(pageNum)
+      .then(links => {
+        if (epoch !== renderEpoch) return;
+        setPageLinks(previous => {
+          if (previous[pageNum]) return previous;
+          return { ...previous, [pageNum]: links };
+        });
+      })
+      .catch(error => {
+        console.error(`Failed to load links for page ${pageNum}:`, error);
+      });
   }
 
   function applySelectionResult(pageNum: number, nextSelection: { quads: PDFQuad[]; text: string }) {
@@ -313,12 +443,181 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   let viewportRaf: number | null = null;
+  let keyboardScrollRaf: number | null = null;
+  let lastKeyboardScrollTime = 0;
+  let lastKeyboardScrollKey: 'w' | 's' | null = null;
+  const heldKeyboardScrollKeys = new Set<'w' | 's'>();
+
   function scheduleViewportSync() {
     if (viewportRaf !== null) return;
     viewportRaf = window.requestAnimationFrame(() => {
       viewportRaf = null;
       syncViewport();
     });
+  }
+
+  function isShortcutBlockedTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+
+    return target.closest([
+      'input',
+      'textarea',
+      'select',
+      'button',
+      'a[href]',
+      '[contenteditable]:not([contenteditable="false"])',
+      '[role="textbox"]',
+      '[role="searchbox"]',
+      '[role="combobox"]',
+      '[role="button"]',
+      '[role="link"]',
+      '[tabindex]',
+    ].join(',')) !== null;
+  }
+
+  function shouldIgnoreReaderShortcut(event: KeyboardEvent): boolean {
+    if (props.shortcutsEnabled === false) return true;
+    if (event.defaultPrevented || event.isComposing) return true;
+    if (event.ctrlKey || event.metaKey || event.altKey) return true;
+    if (isShortcutBlockedTarget(event.target)) return true;
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      if (activeElement.isContentEditable) return true;
+      if (isShortcutBlockedTarget(activeElement)) return true;
+    }
+
+    return false;
+  }
+
+  function getKeyboardScrollDirection(): number {
+    if (lastKeyboardScrollKey && heldKeyboardScrollKeys.has(lastKeyboardScrollKey)) {
+      return lastKeyboardScrollKey === 'w' ? -1 : 1;
+    }
+
+    if (heldKeyboardScrollKeys.has('s') && !heldKeyboardScrollKeys.has('w')) return 1;
+    if (heldKeyboardScrollKeys.has('w') && !heldKeyboardScrollKeys.has('s')) return -1;
+    return 0;
+  }
+
+  function applyKeyboardScrollDelta(delta: number) {
+    if (!containerRef || delta === 0) return;
+    containerRef.scrollTop += delta;
+    scheduleViewportSync();
+  }
+
+  function stopKeyboardScroll() {
+    heldKeyboardScrollKeys.clear();
+    lastKeyboardScrollKey = null;
+    lastKeyboardScrollTime = 0;
+
+    if (keyboardScrollRaf !== null) {
+      window.cancelAnimationFrame(keyboardScrollRaf);
+      keyboardScrollRaf = null;
+    }
+  }
+
+  function stepKeyboardScroll(now: number) {
+    const direction = getKeyboardScrollDirection();
+    if (!containerRef || direction === 0) {
+      keyboardScrollRaf = null;
+      lastKeyboardScrollTime = 0;
+      return;
+    }
+
+    const dt = lastKeyboardScrollTime === 0
+      ? 1 / 60
+      : Math.min(MAX_KEYBOARD_SCROLL_DT, (now - lastKeyboardScrollTime) / 1000);
+
+    lastKeyboardScrollTime = now;
+    applyKeyboardScrollDelta(direction * KEYBOARD_HOLD_SCROLL_SPEED * dt);
+    keyboardScrollRaf = window.requestAnimationFrame(stepKeyboardScroll);
+  }
+
+  function startKeyboardScroll(key: 'w' | 's') {
+    const wasHeld = heldKeyboardScrollKeys.has(key);
+    heldKeyboardScrollKeys.add(key);
+    lastKeyboardScrollKey = key;
+
+    if (!wasHeld) {
+      applyKeyboardScrollDelta((key === 'w' ? -1 : 1) * KEYBOARD_TAP_SCROLL_STEP);
+    }
+
+    if (keyboardScrollRaf === null) {
+      lastKeyboardScrollTime = 0;
+      keyboardScrollRaf = window.requestAnimationFrame(stepKeyboardScroll);
+    }
+  }
+
+  function stopKeyboardScrollKey(key: 'w' | 's') {
+    heldKeyboardScrollKeys.delete(key);
+
+    if (lastKeyboardScrollKey === key) {
+      lastKeyboardScrollKey = heldKeyboardScrollKeys.has('s') ? 's' : heldKeyboardScrollKeys.has('w') ? 'w' : null;
+    }
+
+    if (heldKeyboardScrollKeys.size === 0) {
+      stopKeyboardScroll();
+    }
+  }
+
+  function runPlaybackShortcut(action: 'toggle' | 'prev' | 'next') {
+    const request = action === 'toggle'
+      ? playbackController.toggle()
+      : action === 'prev'
+        ? playbackController.prev()
+        : playbackController.next();
+
+    void request.catch(error => {
+      console.error(`Failed to run ${action} shortcut:`, error);
+    });
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (shouldIgnoreReaderShortcut(event)) return;
+
+    const key = event.key.toLowerCase();
+
+    if (event.repeat && (key === 'a' || key === 'd' || key === ' ' || key === 'spacebar')) {
+      event.preventDefault();
+      return;
+    }
+
+    if (key === 'w' || key === 's') {
+      if (!containerRef) return;
+      event.preventDefault();
+      startKeyboardScroll(key);
+      return;
+    }
+
+    if (key === 'a') {
+      event.preventDefault();
+      runPlaybackShortcut('prev');
+      return;
+    }
+
+    if (key === 'd') {
+      event.preventDefault();
+      runPlaybackShortcut('next');
+      return;
+    }
+
+    if (key === ' ' || key === 'spacebar') {
+      event.preventDefault();
+      runPlaybackShortcut('toggle');
+    }
+  }
+
+  function handleKeyUp(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    if (key !== 'w' && key !== 's') return;
+    stopKeyboardScrollKey(key);
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+      stopKeyboardScroll();
+    }
   }
 
   function computeVisibleRange(scrollTop: number, viewHeight: number): VisibleRange {
@@ -412,12 +711,13 @@ export const PDFViewer: Component<Props> = (props) => {
       if (canvasRefs.get(pageNum) !== canvas) return;
       if (!isPageMounted(pageNum)) return;
 
-      pdfStore.addLoadedPage(pageNum);
       setPageSizes(prev => {
         const nextSizes = [...prev];
         nextSizes[pageNum] = { width, height, bounds };
         return nextSizes;
       });
+      pdfStore.addLoadedPage(pageNum);
+      loadPageLinks(pageNum, epoch);
     } catch (e) {
       console.error(`Failed to render page ${pageNum}:`, e);
     } finally {
@@ -462,8 +762,23 @@ export const PDFViewer: Component<Props> = (props) => {
     syncViewport();
   }
 
+  async function applyNavigationTarget(pageNum: number, yPos: number | undefined, epoch: number) {
+    captureInitialRevealTarget(pageNum, yPos);
+    await refreshEstimatedPageDims(epoch);
+    if (epoch !== renderEpoch) return;
+
+    scrollToPage(pageNum, yPos);
+
+    window.setTimeout(() => {
+      if (pdfStore.navigateToPage() !== pageNum || pdfStore.navigateY() !== yPos) return;
+      pdfStore.clearNavigation();
+    }, 100);
+  }
+
   function getPageOffsetY(pageNum: number, scrollTop: number): number {
-    return Math.max(0, (scrollTop - (getPageTopY(pageNum) - VIEWER_PADDING)) / pdfStore.zoomLevel());
+    const bounds = getPageBounds(pageNum);
+    const offsetY = Math.max(0, (scrollTop - (getPageTopY(pageNum) - VIEWER_PADDING)) / pdfStore.zoomLevel());
+    return (bounds?.y0 ?? 0) + offsetY;
   }
 
   createEffect(on(
@@ -519,10 +834,14 @@ export const PDFViewer: Component<Props> = (props) => {
         void documentSession.ensurePageMetrics(pageNum).catch(error => {
           console.error(`Failed to warm metrics for page ${pageNum}:`, error);
         });
+        loadPageLinks(pageNum);
       }
 
       const offsetY = getPageOffsetY(range.firstVisible, viewport().scrollTop);
       const previousPage = pdfStore.currentPage();
+
+      if (isInitialRevealHidden() || pdfStore.navigateToPage() !== null) return;
+
       pdfStore.setCurrentViewportPosition(range.firstVisible, offsetY);
       if (previousPage !== range.firstVisible) {
         props.onPageChange?.(range.firstVisible);
@@ -539,22 +858,27 @@ export const PDFViewer: Component<Props> = (props) => {
       if (pageNum === null) return;
 
       const epoch = renderEpoch;
-      await refreshEstimatedPageDims(epoch);
-      if (epoch !== renderEpoch) return;
-
-      scrollToPage(pageNum, yPos);
-
-      // Clear navigation after a short delay (after scroll starts)
-      window.setTimeout(() => pdfStore.clearNavigation(), 100);
+      await applyNavigationTarget(pageNum, yPos, epoch);
     },
     { defer: true }
   ));
 
   onMount(() => {
+    if (pdfStore.totalPages() > 0) {
+      const pendingTarget = getPendingNavigationTarget();
+      startInitialRevealGate(renderEpoch, pendingTarget?.pageNum ?? null, pendingTarget?.y);
+      if (pendingTarget) {
+        void applyNavigationTarget(pendingTarget.pageNum, pendingTarget.y, renderEpoch);
+      }
+    }
+
     void refreshEstimatedPageDims(renderEpoch);
-    syncViewport();
     window.addEventListener('copy', handleCopy);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', stopKeyboardScroll);
     window.addEventListener('resize', scheduleViewportSync);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   });
 
   onCleanup(() => {
@@ -564,8 +888,24 @@ export const PDFViewer: Component<Props> = (props) => {
     clearHoverCursor();
     if (userScrollTimeout) clearTimeout(userScrollTimeout);
     clearSelection();
+    clearInitialRevealTimers();
+    stopKeyboardScroll();
     window.removeEventListener('copy', handleCopy);
+    window.removeEventListener('keydown', handleKeyDown);
+    window.removeEventListener('keyup', handleKeyUp);
+    window.removeEventListener('blur', stopKeyboardScroll);
     window.removeEventListener('resize', scheduleViewportSync);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  });
+
+  createEffect(() => {
+    const gate = initialRevealGate();
+    pdfStore.loadedPages();
+
+    if (!gate.hidden || gate.epoch !== renderEpoch || gate.targetPageNum === null) return;
+    if (!pdfStore.isPageLoaded(gate.targetPageNum)) return;
+
+    completeInitialReveal(gate.targetPageNum, gate.epoch);
   });
 
   // Helper to get Y offset for a page
@@ -729,6 +1069,26 @@ export const PDFViewer: Component<Props> = (props) => {
     return <polygon points={points} fill="#6ea8ff" opacity="0.35" />;
   }
 
+  function handleLinkClick(link: PDFLink, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearSelection();
+
+    if (link.target.kind === 'internal') {
+      pdfStore.navigateToPageFromLink(link.target.pageNum, link.target.y);
+      return;
+    }
+
+    if (!openSafeExternalLink(link.target.uri)) {
+      console.warn('Blocked unsafe PDF link:', link.target.uri);
+    }
+  }
+
+  function handleLinkPointerDown(event: PointerEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   const PageCanvasLayer: Component<{ pageNum: number }> = (pageProps) => {
     let canvasRef: HTMLCanvasElement | undefined;
 
@@ -794,6 +1154,22 @@ export const PDFViewer: Component<Props> = (props) => {
                   )}
                 </For>
               </g>
+              <g>
+                <For each={getPageLinks(pageProps.pageNum)}>
+                  {(link) => (
+                    <rect
+                      x={link.bounds.x0}
+                      y={link.bounds.y0}
+                      width={link.bounds.width}
+                      height={link.bounds.height}
+                      fill="transparent"
+                      style={{ cursor: 'pointer', 'pointer-events': 'all' }}
+                      onPointerDown={handleLinkPointerDown}
+                      onClick={(event) => handleLinkClick(link, event)}
+                    />
+                  )}
+                </For>
+              </g>
             </svg>
           )}
         </Show>
@@ -836,7 +1212,8 @@ export const PDFViewer: Component<Props> = (props) => {
         "flex-direction": 'column',
         "align-items": 'center',
         "gap": `${PAGE_GAP}px`,
-        "padding": '20px'
+        "padding": '20px',
+        visibility: isInitialRevealHidden() ? 'hidden' : 'visible'
       }}>
         <For each={pageIndices()}>
           {(pageNum) => (

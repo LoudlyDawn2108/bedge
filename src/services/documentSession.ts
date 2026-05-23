@@ -4,6 +4,7 @@ import type {
   PageDimensions,
   PageMetrics,
   PagePoint,
+  PDFLink,
   PDFQuad,
   RenderedPage,
   SelectionResult,
@@ -59,6 +60,8 @@ export class DocumentSession {
   private pageMetricsInFlight = new Map<number, Promise<PageMetrics>>();
   private pageTextCache = new Map<number, Word[]>();
   private textInFlight = new Map<number, Promise<Word[]>>();
+  private pageLinksCache = new Map<number, PDFLink[]>();
+  private linksInFlight = new Map<number, Promise<PDFLink[]>>();
   private sessionToken = 0;
   private activeSelectionPage: number | null = null;
   private activeSelectionId: number | null = null;
@@ -111,6 +114,8 @@ export class DocumentSession {
     this.pageMetricsInFlight.clear();
     this.pageTextCache.clear();
     this.textInFlight.clear();
+    this.pageLinksCache.clear();
+    this.linksInFlight.clear();
   }
 
   private requireDocumentId(): number {
@@ -211,6 +216,34 @@ export class DocumentSession {
 
   peekPageText(pageNum: number): Word[] | null {
     return this.pageTextCache.get(pageNum) ?? null;
+  }
+
+  async getPageLinks(pageNum: number): Promise<PDFLink[]> {
+    const cached = this.pageLinksCache.get(pageNum);
+    if (cached) return cached;
+
+    const inFlight = this.linksInFlight.get(pageNum);
+    if (inFlight) return inFlight;
+
+    const documentId = this.requireDocumentId();
+    const token = this.sessionToken;
+    const promise = pdfWorkerClient.getPageLinks(documentId, pageNum)
+      .then(links => {
+        if (token === this.sessionToken && documentId === this.documentId) {
+          this.pageLinksCache.set(pageNum, links);
+        }
+        return links;
+      })
+      .finally(() => {
+        this.linksInFlight.delete(pageNum);
+      });
+
+    this.linksInFlight.set(pageNum, promise);
+    return promise;
+  }
+
+  peekPageLinks(pageNum: number): PDFLink[] | null {
+    return this.pageLinksCache.get(pageNum) ?? null;
   }
 
   async renderPage(pageNum: number, canvas: HTMLCanvasElement, scale: number): Promise<{ width: number; height: number; bounds: PageBounds }> {

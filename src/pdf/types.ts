@@ -39,6 +39,31 @@ export interface TOCItem {
   y?: number;
 }
 
+export type PDFLinkDestinationType = 'Fit' | 'FitB' | 'FitH' | 'FitBH' | 'FitV' | 'FitBV' | 'FitR' | 'XYZ';
+
+export interface PDFInternalLinkTarget {
+  kind: 'internal';
+  pageNum: number;
+  x?: number;
+  y?: number;
+  zoom?: number;
+  destinationType?: PDFLinkDestinationType;
+}
+
+export interface PDFExternalLinkTarget {
+  kind: 'external';
+  uri: string;
+}
+
+export type PDFLinkTarget = PDFInternalLinkTarget | PDFExternalLinkTarget;
+
+export interface PDFLink {
+  id: string;
+  bounds: PageBounds;
+  uri: string;
+  target: PDFLinkTarget;
+}
+
 export interface RenderedPage {
   width: number;
   height: number;

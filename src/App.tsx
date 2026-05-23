@@ -1,15 +1,16 @@
-import { Show, createSignal, createEffect, onCleanup, onMount } from 'solid-js';
+import { Show, batch, createSignal, createEffect, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Toolbar } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { PDFViewer } from './components/PDFViewer';
 import { LibraryModal } from './components/LibraryModal';
 import { documentSession } from './services/documentSession';
+import { pdfHistory } from './services/pdfHistory';
 import { ttsService } from './services/ttsService';
 import { pdfStore } from './stores/pdfStore';
 import { readingSession } from './stores/readingSessionStore';
 import { playbackController } from './controllers/playbackController';
-import { addBook, deleteBook, getBookByPath, updateBook, getAllBooks, removeLegacyPdfBlobs, type Book, type StoredPDFFileHandle } from './services/db';
+import { addBook, deleteBook, getBookByPath, updateBook, getAllBooks, getMostRecentlyOpenedBook, removeLegacyPdfBlobs, type Book, type StoredPDFFileHandle } from './services/db';
 import './App.css';
 
 interface PDFOpenFilePickerOptions {
@@ -47,9 +48,15 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'NotFoundError';
 }
 
+interface ReopenStoredBookOptions {
+  requestPermission: boolean;
+  canOpen?: () => boolean;
+}
+
 const App: Component = () => {
   const [showLibrary, setShowLibrary] = createSignal(false);
   let fileInputRef: HTMLInputElement | undefined;
+  let openBookGeneration = 0;
 
   async function openFileDialog() {
     const openFilePicker = (window as WindowWithPDFFilePicker).showOpenFilePicker;
@@ -76,23 +83,36 @@ const App: Component = () => {
   }
 
   async function openBook(source: File | Blob, bookMeta: { path: string; title: string; fileHandle?: StoredPDFFileHandle }) {
+    openBookGeneration += 1;
+    const generation = openBookGeneration;
+
     try {
       playbackController.stop();
+      await saveProgressNow();
+
+      batch(() => {
+        pdfStore.setTotalPages(0);
+        pdfStore.setCurrentBook(null);
+        pdfStore.clearNavigation();
+        pdfStore.clearLinkHistory();
+        pdfStore.clearLoadedPages();
+        pdfStore.setTOC([]);
+        readingSession.resetDocumentState();
+      });
+
       await documentSession.open(source);
-      pdfStore.setTotalPages(documentSession.numPages);
-      pdfStore.setCurrentViewportPosition(0, 0);
-      pdfStore.clearNavigation();
-      pdfStore.clearLoadedPages();
-      readingSession.resetDocumentState();
+      if (generation !== openBookGeneration) return;
 
       documentSession.onPageTextReady = (pageNum, words, dims) => {
         readingSession.addPageSentences(pageNum, words, dims.height, dims.width, pdfStore.zoomLevel());
       };
 
       const toc = await documentSession.getTOC();
-      pdfStore.setTOC(toc);
+      if (generation !== openBookGeneration) return;
 
       let book = await getBookByPath(bookMeta.path);
+      if (generation !== openBookGeneration) return;
+
       if (!book) {
         const id = await addBook({
           path: bookMeta.path,
@@ -108,6 +128,7 @@ const App: Component = () => {
           lastOpened: Date.now(),
           fileHandle: bookMeta.fileHandle,
         });
+        if (generation !== openBookGeneration) return;
         book = await getAllBooks().then(books => books.find(b => b.id === id));
       } else {
         const updates: Partial<Book> = { lastOpened: Date.now() };
@@ -115,23 +136,28 @@ const App: Component = () => {
           updates.fileHandle = bookMeta.fileHandle;
         }
         await updateBook(book.id!, updates);
+        if (generation !== openBookGeneration) return;
         book = { ...book, ...updates };
       }
 
       if (book) {
-        pdfStore.setCurrentBook(book);
-        pdfStore.setZoomLevel(book.zoomLevel);
-        readingSession.setHeaderMargin(book.headerMargin);
-        readingSession.setFooterMargin(book.footerMargin);
-        readingSession.setColumnMode(book.columnMode);
-
         const maxPage = Math.max(0, documentSession.numPages - 1);
         const restoredPage = Math.max(0, Math.min(book.lastPage, maxPage));
         const restoredOffsetY = Math.max(0, book.lastPageOffsetY ?? 0);
         const restoredSentence = Math.max(0, book.lastSentence);
 
-        readingSession.goToSentence(restoredPage, restoredSentence);
-        pdfStore.goToPage(restoredPage, restoredOffsetY);
+        batch(() => {
+          pdfStore.setCurrentBook(book);
+          pdfStore.setZoomLevel(book.zoomLevel);
+          readingSession.setHeaderMargin(book.headerMargin);
+          readingSession.setFooterMargin(book.footerMargin);
+          readingSession.setColumnMode(book.columnMode);
+          pdfStore.setTOC(toc);
+          readingSession.goToSentence(restoredPage, restoredSentence);
+          pdfStore.goToPage(restoredPage, restoredOffsetY);
+          pdfStore.startLinkHistory(restoredPage, restoredOffsetY);
+          pdfStore.setTotalPages(documentSession.numPages);
+        });
       }
 
     } catch (err) {
@@ -157,17 +183,10 @@ const App: Component = () => {
     }
 
     try {
-      const permission = await book.fileHandle.queryPermission?.({ mode: 'read' });
-      if (permission !== 'granted') {
-        const requestedPermission = await book.fileHandle.requestPermission?.({ mode: 'read' });
-        if (requestedPermission !== 'granted') {
-          alert('Permission to reopen this PDF was not granted. The library entry was kept.');
-          return;
-        }
+      const reopened = await reopenStoredBook(book, { requestPermission: true });
+      if (!reopened) {
+        alert('Permission to reopen this PDF was not granted. The library entry was kept.');
       }
-
-      const file = await book.fileHandle.getFile();
-      await openBook(file, { path: book.path, title: book.title, fileHandle: book.fileHandle });
     } catch (error) {
       if (isMissingFileError(error) && book.id !== undefined) {
         await deleteBook(book.id);
@@ -180,6 +199,45 @@ const App: Component = () => {
     }
   }
 
+  async function reopenStoredBook(book: Book, options: ReopenStoredBookOptions): Promise<boolean> {
+    if (!book.fileHandle) return false;
+
+    const permission = await book.fileHandle.queryPermission?.({ mode: 'read' });
+    if (permission !== 'granted') {
+      if (!options.requestPermission) return false;
+
+      const requestedPermission = await book.fileHandle.requestPermission?.({ mode: 'read' });
+      if (requestedPermission !== 'granted') return false;
+    }
+
+    const file = await book.fileHandle.getFile();
+    if (options.canOpen && !options.canOpen()) return false;
+
+    await openBook(file, { path: book.path, title: book.title, fileHandle: book.fileHandle });
+    return true;
+  }
+
+  async function autoReopenLastBook(): Promise<void> {
+    if (pdfStore.currentBook()) return;
+
+    const book = await getMostRecentlyOpenedBook();
+    if (!book?.fileHandle) return;
+    const startupGeneration = openBookGeneration;
+
+    try {
+      if (pdfStore.currentBook()) return;
+      const reopened = await reopenStoredBook(book, {
+        requestPermission: false,
+        canOpen: () => !pdfStore.currentBook() && openBookGeneration === startupGeneration,
+      });
+      if (!reopened) {
+        console.info('Last PDF was not auto-reopened because read permission is not currently granted.');
+      }
+    } catch (error) {
+      console.warn('Failed to auto-reopen last PDF:', error);
+    }
+  }
+
   function handleTOCSelect(pageNum: number, y?: number) {
     pdfStore.goToPage(pageNum, y);
   }
@@ -187,8 +245,30 @@ const App: Component = () => {
   let persistTimer: number | undefined;
 
   onMount(() => {
+    pdfHistory.setManualScrollRestoration();
+
+    const handlePopState = (event: PopStateEvent) => {
+      const book = pdfStore.currentBook();
+      if (!book) return;
+
+      const state = pdfHistory.readPopState(event.state, pdfStore.totalPages());
+      if (!state) return;
+
+      const location = pdfHistory.applyPopState(state);
+      pdfStore.navigateToPageFromHistory(location.pageNum, location.y);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
     void removeLegacyPdfBlobs().catch(error => {
       console.error('Failed to remove legacy PDF blobs:', error);
+    });
+
+    void autoReopenLastBook();
+
+    onCleanup(() => {
+      window.removeEventListener('popstate', handlePopState);
+      pdfHistory.restoreScrollRestoration();
     });
   });
 
@@ -326,7 +406,7 @@ const App: Component = () => {
             </div>
           }
         >
-          <PDFViewer />
+          <PDFViewer shortcutsEnabled={!showLibrary()} />
         </Show>
       </div>
     </div>

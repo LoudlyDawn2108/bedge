@@ -4,6 +4,8 @@ import type {
   PageBounds,
   PageMetrics,
   PagePoint,
+  PDFLink,
+  PDFLinkDestinationType,
   PDFQuad,
   RenderedPage,
   SelectionResult,
@@ -50,7 +52,10 @@ interface OutlineItem {
 
 interface LinkDestination {
   page: number;
-  y: number;
+  x?: number;
+  y?: number;
+  zoom?: number;
+  type?: PDFLinkDestinationType;
 }
 
 interface SelectionSession {
@@ -66,9 +71,20 @@ function isStructuredTextLineBBoxObject(value: unknown): value is StructuredText
 }
 
 function hasResolveLinkDestination(doc: mupdf.Document): doc is mupdf.Document & {
-  resolveLinkDestination(uri: string | mupdf.Link): { page: number; y: number };
+  resolveLinkDestination(uri: string | mupdf.Link): unknown;
 } {
   return typeof (doc as { resolveLinkDestination?: unknown }).resolveLinkDestination === 'function';
+}
+
+function isPDFLinkDestinationType(value: unknown): value is PDFLinkDestinationType {
+  return value === 'Fit'
+    || value === 'FitB'
+    || value === 'FitH'
+    || value === 'FitBH'
+    || value === 'FitV'
+    || value === 'FitBV'
+    || value === 'FitR'
+    || value === 'XYZ';
 }
 
 function clampPageNum(pageNum: number, totalPages: number): number | undefined {
@@ -92,13 +108,24 @@ function normalizeDestination(
       pageNum = clampPageNum(candidate.page, totalPages) ?? pageNum;
     }
 
-    if (typeof candidate.y === 'number' && Number.isFinite(candidate.y) && candidate.y >= 0) {
+    if (typeof candidate.y === 'number' && Number.isFinite(candidate.y)) {
       y = candidate.y;
     }
   }
 
   if (pageNum === undefined) return undefined;
-  return y === undefined ? { page: pageNum, y: 0 } : { page: pageNum, y };
+
+  const destination: LinkDestination = { page: pageNum };
+  if (y !== undefined) destination.y = y;
+
+  if (resolvedDestination && typeof resolvedDestination === 'object') {
+    const candidate = resolvedDestination as Record<string, unknown>;
+    if (typeof candidate.x === 'number' && Number.isFinite(candidate.x)) destination.x = candidate.x;
+    if (typeof candidate.zoom === 'number' && Number.isFinite(candidate.zoom)) destination.zoom = candidate.zoom;
+    if (isPDFLinkDestinationType(candidate.type)) destination.type = candidate.type;
+  }
+
+  return destination;
 }
 
 function toPageBounds(bounds: mupdf.Rect): PageBounds {
@@ -405,6 +432,59 @@ export class MuPdfEngine {
     }
   }
 
+  getPageLinks(documentId: number, pageNum: number): PDFLink[] {
+    const doc = this.getDocument(documentId);
+    const page = this.loadPage(documentId, pageNum);
+    const totalPages = doc.countPages();
+    const links: mupdf.Link[] = [];
+
+    try {
+      links.push(...page.getLinks());
+      const serializedLinks: PDFLink[] = [];
+
+      links.forEach((link, index) => {
+        const uri = link.getURI();
+        const bounds = toPageBounds(link.getBounds());
+
+        if (link.isExternal()) {
+          serializedLinks.push({
+            id: `${pageNum}-${index}`,
+            bounds,
+            uri,
+            target: { kind: 'external', uri },
+          });
+          return;
+        }
+
+        if (!hasResolveLinkDestination(doc)) return;
+
+        const destination = normalizeDestination(totalPages, undefined, doc.resolveLinkDestination(link));
+        if (!destination) return;
+
+        serializedLinks.push({
+          id: `${pageNum}-${index}`,
+          bounds,
+          uri,
+          target: {
+            kind: 'internal',
+            pageNum: destination.page,
+            x: destination.x,
+            y: destination.y,
+            zoom: destination.zoom,
+            destinationType: destination.type,
+          },
+        });
+      });
+
+      return serializedLinks;
+    } finally {
+      for (const link of links) {
+        link.destroy();
+      }
+      page.destroy();
+    }
+  }
+
   getPageMetrics(documentId: number, pageNum: number): PageMetrics {
     const page = this.loadPage(documentId, pageNum);
 
@@ -454,7 +534,7 @@ export class MuPdfEngine {
           title: item.title || '',
           pageNum: destination.page,
           level,
-          y: destination.y > 0 ? destination.y : undefined,
+          y: destination.y !== undefined && destination.y > 0 ? destination.y : undefined,
         });
 
         if (item.down && Array.isArray(item.down)) {

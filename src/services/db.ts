@@ -66,6 +66,10 @@ export async function getAllBooks(): Promise<Book[]> {
   return await db.books.orderBy('lastOpened').reverse().toArray();
 }
 
+export async function getMostRecentlyOpenedBook(): Promise<Book | undefined> {
+  return await db.books.orderBy('lastOpened').reverse().first();
+}
+
 export async function deleteBook(id: number): Promise<void> {
   await db.books.delete(id);
 }

@@ -2,6 +2,7 @@ import type {
   OpenDocumentResult,
   PageMetrics,
   PagePoint,
+  PDFLink,
   RenderedPage,
   SelectionResult,
   TOCItem,
@@ -88,6 +89,14 @@ export class PdfWorkerClient {
     await this.ready();
     const { id, promise } = this.createPending<Word[]>();
     const request: PdfWorkerRequest = { id, type: 'getPageText', documentId, pageNum };
+    this.worker.postMessage(request);
+    return promise;
+  }
+
+  async getPageLinks(documentId: number, pageNum: number): Promise<PDFLink[]> {
+    await this.ready();
+    const { id, promise } = this.createPending<PDFLink[]>();
+    const request: PdfWorkerRequest = { id, type: 'getPageLinks', documentId, pageNum };
     this.worker.postMessage(request);
     return promise;
   }

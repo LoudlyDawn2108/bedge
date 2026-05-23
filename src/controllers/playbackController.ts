@@ -80,21 +80,12 @@ class PlaybackController {
   async start(): Promise<void> {
     if (readingSession.isPlaying()) return;
 
-    const currentSentence = readingSession.getCurrentSentence();
     const visiblePage = pdfStore.currentPage();
+    const currentCursor = readingSession.cursor();
+    const targetSentenceIndex = currentCursor.pageNum === visiblePage ? currentCursor.sentenceIndex : 0;
 
-    if (!currentSentence) {
-      const restoredCursor = readingSession.cursor();
-      const restored = await this.ensureCursorReady(restoredCursor.pageNum, restoredCursor.sentenceIndex);
-      const visible = restored || (await this.ensureCursorReady(visiblePage));
-      if (!visible) return;
-    } else if (currentSentence.pageNum !== visiblePage && !readingSession.isPageCached(currentSentence.pageNum)) {
-      const restored = await this.ensureCursorReady(currentSentence.pageNum, readingSession.cursor().sentenceIndex);
-      if (!restored) {
-        const visible = await this.ensureCursorReady(visiblePage);
-        if (!visible) return;
-      }
-    }
+    const ready = await this.ensureCursorReady(visiblePage, targetSentenceIndex);
+    if (!ready) return;
 
     const runId = ++this.activeRunId;
     readingSession.setIsPlaying(true);
