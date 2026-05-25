@@ -84,8 +84,9 @@ export const PDFViewer: Component<Props> = (props) => {
   const VIEWER_PADDING = 20;
   const PAGES_PER_BATCH = 5;
   const INITIAL_REVEAL_FAIL_OPEN_MS = 5000;
-  const KEYBOARD_TAP_SCROLL_STEP = 40;
   const KEYBOARD_HOLD_SCROLL_SPEED = 1100;
+  const KEYBOARD_SCROLL_RAMP_MS = 450;
+  const KEYBOARD_INITIAL_SPEED_FACTOR = 0.18;
   const MAX_KEYBOARD_SCROLL_DT = 0.05;
 
   function clearInitialRevealTimers() {
@@ -445,6 +446,7 @@ export const PDFViewer: Component<Props> = (props) => {
   let viewportRaf: number | null = null;
   let keyboardScrollRaf: number | null = null;
   let lastKeyboardScrollTime = 0;
+  let keyboardScrollStartTime = 0;
   let lastKeyboardScrollKey: 'w' | 's' | null = null;
   const heldKeyboardScrollKeys = new Set<'w' | 's'>();
 
@@ -510,6 +512,7 @@ export const PDFViewer: Component<Props> = (props) => {
     heldKeyboardScrollKeys.clear();
     lastKeyboardScrollKey = null;
     lastKeyboardScrollTime = 0;
+    keyboardScrollStartTime = 0;
 
     if (keyboardScrollRaf !== null) {
       window.cancelAnimationFrame(keyboardScrollRaf);
@@ -529,22 +532,25 @@ export const PDFViewer: Component<Props> = (props) => {
       ? 1 / 60
       : Math.min(MAX_KEYBOARD_SCROLL_DT, (now - lastKeyboardScrollTime) / 1000);
 
+    if (keyboardScrollStartTime === 0) {
+      keyboardScrollStartTime = now;
+    }
+
+    const rampProgress = Math.min(1, (now - keyboardScrollStartTime) / KEYBOARD_SCROLL_RAMP_MS);
+    const speedFactor = KEYBOARD_INITIAL_SPEED_FACTOR + ((1 - KEYBOARD_INITIAL_SPEED_FACTOR) * rampProgress);
+
     lastKeyboardScrollTime = now;
-    applyKeyboardScrollDelta(direction * KEYBOARD_HOLD_SCROLL_SPEED * dt);
+    applyKeyboardScrollDelta(direction * KEYBOARD_HOLD_SCROLL_SPEED * speedFactor * dt);
     keyboardScrollRaf = window.requestAnimationFrame(stepKeyboardScroll);
   }
 
   function startKeyboardScroll(key: 'w' | 's') {
-    const wasHeld = heldKeyboardScrollKeys.has(key);
     heldKeyboardScrollKeys.add(key);
     lastKeyboardScrollKey = key;
 
-    if (!wasHeld) {
-      applyKeyboardScrollDelta((key === 'w' ? -1 : 1) * KEYBOARD_TAP_SCROLL_STEP);
-    }
-
     if (keyboardScrollRaf === null) {
       lastKeyboardScrollTime = 0;
+      keyboardScrollStartTime = 0;
       keyboardScrollRaf = window.requestAnimationFrame(stepKeyboardScroll);
     }
   }
