@@ -2,7 +2,12 @@ import { createSignal, createRoot } from 'solid-js';
 import type { Word } from '../pdf/types';
 import type { Sentence } from '../services/readingTypes';
 import { buildSentences } from '../services/sentenceBuilder';
+import { hasTerminalSentencePunctuation } from '../services/sentenceContinuity';
 import { pdfStore } from './pdfStore';
+
+export const DEFAULT_COLUMN_MODE = 1;
+export const DEFAULT_HEADER_MARGIN = 50;
+export const DEFAULT_FOOTER_MARGIN = 175;
 
 export interface ReadingCursor {
   pageNum: number;
@@ -13,10 +18,71 @@ function createReadingSessionStore() {
   const pageCache = new Map<number, Sentence[]>();
 
   const [cursor, setCursor] = createSignal<ReadingCursor>({ pageNum: 0, sentenceIndex: 0 });
+  const [continuedHighlightCursor, setContinuedHighlightCursorSignal] = createSignal<ReadingCursor | null>(null);
   const [isPlaying, setIsPlaying] = createSignal(false);
-  const [columnMode, setColumnMode] = createSignal(1);
-  const [headerMargin, setHeaderMargin] = createSignal(50);
-  const [footerMargin, setFooterMargin] = createSignal(60);
+  const [columnMode, setColumnMode] = createSignal(DEFAULT_COLUMN_MODE);
+  const [headerMargin, setHeaderMargin] = createSignal(DEFAULT_HEADER_MARGIN);
+  const [footerMargin, setFooterMargin] = createSignal(DEFAULT_FOOTER_MARGIN);
+
+  function sameCursor(left: ReadingCursor | null, right: ReadingCursor): boolean {
+    return left?.pageNum === right.pageNum && left.sentenceIndex === right.sentenceIndex;
+  }
+
+  function getContinuationCursorForStart(startCursor: ReadingCursor): ReadingCursor | null {
+    const pageSentences = pageCache.get(startCursor.pageNum) ?? [];
+    const sentence = pageSentences[startCursor.sentenceIndex];
+    if (!sentence || startCursor.sentenceIndex !== pageSentences.length - 1) return null;
+    if (hasTerminalSentencePunctuation(sentence.text)) return null;
+
+    const nextPage = startCursor.pageNum + 1;
+    const nextSentences = pageCache.get(nextPage) ?? [];
+    return nextSentences.length > 0 ? { pageNum: nextPage, sentenceIndex: 0 } : null;
+  }
+
+  function getLogicalStartCursor(target: ReadingCursor): ReadingCursor {
+    if (target.sentenceIndex !== 0 || target.pageNum <= 0) return target;
+
+    const prevPage = target.pageNum - 1;
+    const prevSentences = pageCache.get(prevPage) ?? [];
+    const prevSentenceIndex = prevSentences.length - 1;
+    const prevSentence = prevSentences[prevSentenceIndex];
+    if (!prevSentence || hasTerminalSentencePunctuation(prevSentence.text)) return target;
+
+    return { pageNum: prevPage, sentenceIndex: prevSentenceIndex };
+  }
+
+  function getLogicalEndCursor(target: ReadingCursor): ReadingCursor {
+    const startCursor = getLogicalStartCursor(target);
+    return getContinuationCursorForStart(startCursor) ?? startCursor;
+  }
+
+  function syncContinuedHighlightForCursor(target: ReadingCursor): void {
+    const nextCursor = getContinuationCursorForStart(target);
+    const currentContinuedCursor = continuedHighlightCursor();
+
+    if (nextCursor) {
+      if (!sameCursor(currentContinuedCursor, nextCursor)) {
+        setContinuedHighlightCursorSignal(nextCursor);
+      }
+      return;
+    }
+
+    if (currentContinuedCursor) {
+      setContinuedHighlightCursorSignal(null);
+    }
+  }
+
+  function refreshContinuedHighlight(): void {
+    const currentCursor = cursor();
+    const logicalCursor = getLogicalStartCursor(currentCursor);
+
+    if (!sameCursor(currentCursor, logicalCursor)) {
+      setReadingCursor(logicalCursor);
+      return;
+    }
+
+    syncContinuedHighlightForCursor(logicalCursor);
+  }
 
   function addPageSentences(pageNum: number, words: Word[], pageHeightPts: number, pageWidthPts: number, scale: number): void {
     const sentences = buildSentences(
@@ -33,22 +99,41 @@ function createReadingSessionStore() {
 
     const currentCursor = cursor();
     if (currentCursor.pageNum === pageNum && sentences.length > 0 && currentCursor.sentenceIndex >= sentences.length) {
-      setCursor({ pageNum, sentenceIndex: 0 });
+      setReadingCursor({ pageNum, sentenceIndex: 0 });
+    } else {
+      refreshContinuedHighlight();
     }
   }
 
   function clearPageSentences(pageNum: number): void {
     pageCache.delete(pageNum);
+    const continuedCursor = continuedHighlightCursor();
+    if (continuedCursor?.pageNum === pageNum) {
+      setContinuedHighlightCursor(null);
+    }
+    refreshContinuedHighlight();
   }
 
   function clearAllSentences(): void {
     pageCache.clear();
+    setContinuedHighlightCursor(null);
   }
 
   function resetDocumentState(): void {
     pageCache.clear();
-    setCursor({ pageNum: 0, sentenceIndex: 0 });
+    setReadingCursor({ pageNum: 0, sentenceIndex: 0 });
+    setContinuedHighlightCursor(null);
     setIsPlaying(false);
+  }
+
+  function setReadingCursor(nextCursor: ReadingCursor): void {
+    const logicalCursor = getLogicalStartCursor(nextCursor);
+    setCursor(logicalCursor);
+    syncContinuedHighlightForCursor(logicalCursor);
+  }
+
+  function setContinuedHighlightCursor(nextCursor: ReadingCursor | null): void {
+    setContinuedHighlightCursorSignal(nextCursor ? { ...nextCursor } : null);
   }
 
   function getPageSentences(pageNum: number): Sentence[] {
@@ -72,17 +157,22 @@ function createReadingSessionStore() {
     return pageCache.get(target.pageNum)?.[target.sentenceIndex];
   }
 
+  function getContinuedHighlightSentence(): Sentence | undefined {
+    const target = continuedHighlightCursor();
+    return target ? getSentenceAtCursor(target) : undefined;
+  }
+
   function nextSentence(): void {
     const nextCursor = getNextCursorFrom(cursor());
     if (nextCursor) {
-      setCursor(nextCursor);
+      setReadingCursor(nextCursor);
     }
   }
 
   function prevSentence(): void {
     const prevCursor = getPrevCursorFrom(cursor());
     if (prevCursor) {
-      setCursor(prevCursor);
+      setReadingCursor(prevCursor);
     }
   }
 
@@ -113,14 +203,14 @@ function createReadingSessionStore() {
     const sentences = pageCache.get(pageNum);
     if (sentences && sentences.length > 0) {
       const clampedSentenceIndex = Math.max(0, Math.min(sentenceIndex, sentences.length - 1));
-      setCursor({ pageNum, sentenceIndex: clampedSentenceIndex });
+      setReadingCursor({ pageNum, sentenceIndex: clampedSentenceIndex });
       return true;
     }
     return false;
   }
 
   function goToSentence(pageNum: number, sentenceIndex: number): void {
-    setCursor({ pageNum: Math.max(0, pageNum), sentenceIndex: Math.max(0, sentenceIndex) });
+    setReadingCursor({ pageNum: Math.max(0, pageNum), sentenceIndex: Math.max(0, sentenceIndex) });
   }
 
   function isAtEnd(): boolean {
@@ -139,6 +229,18 @@ function createReadingSessionStore() {
   }
 
   function getNextCursorFrom(fromCursor: ReadingCursor): ReadingCursor | null {
+    const logicalEndCursor = getLogicalEndCursor(fromCursor);
+    const physicalNextCursor = getNextPhysicalCursorFrom(logicalEndCursor);
+    return physicalNextCursor ? getLogicalStartCursor(physicalNextCursor) : null;
+  }
+
+  function getPrevCursorFrom(fromCursor: ReadingCursor): ReadingCursor | null {
+    const logicalStartCursor = getLogicalStartCursor(fromCursor);
+    const physicalPrevCursor = getPrevPhysicalCursorFrom(logicalStartCursor);
+    return physicalPrevCursor ? getLogicalStartCursor(physicalPrevCursor) : null;
+  }
+
+  function getNextPhysicalCursorFrom(fromCursor: ReadingCursor): ReadingCursor | null {
     const pageSentences = pageCache.get(fromCursor.pageNum) ?? [];
     if (fromCursor.sentenceIndex + 1 < pageSentences.length) {
       return { pageNum: fromCursor.pageNum, sentenceIndex: fromCursor.sentenceIndex + 1 };
@@ -152,7 +254,7 @@ function createReadingSessionStore() {
     return null;
   }
 
-  function getPrevCursorFrom(fromCursor: ReadingCursor): ReadingCursor | null {
+  function getPrevPhysicalCursorFrom(fromCursor: ReadingCursor): ReadingCursor | null {
     if (fromCursor.sentenceIndex > 0) {
       return { pageNum: fromCursor.pageNum, sentenceIndex: fromCursor.sentenceIndex - 1 };
     }
@@ -188,6 +290,8 @@ function createReadingSessionStore() {
   return {
     cursor,
     setCursor,
+    continuedHighlightCursor,
+    setContinuedHighlightCursor,
     isPlaying,
     setIsPlaying,
     columnMode,
@@ -205,6 +309,7 @@ function createReadingSessionStore() {
     isPageCached,
     getCurrentSentence,
     getSentenceAtCursor,
+    getContinuedHighlightSentence,
     nextSentence,
     prevSentence,
     goToPageSentence,
@@ -212,6 +317,9 @@ function createReadingSessionStore() {
     isAtEnd,
     peekNextCursor,
     peekRelativeCursor,
+    getLogicalStartCursor,
+    getLogicalEndCursor,
+    refreshContinuedHighlight,
   };
 }
 

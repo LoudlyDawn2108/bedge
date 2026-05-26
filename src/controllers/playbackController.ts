@@ -2,6 +2,16 @@ import { ttsService, type TTSRequest } from '../services/ttsService';
 import { documentSession } from '../services/documentSession';
 import { readingSession, type ReadingCursor } from '../stores/readingSessionStore';
 import { pdfStore } from '../stores/pdfStore';
+import { hasTerminalSentencePunctuation, joinSentenceParts } from '../services/sentenceContinuity';
+
+interface SpokenRequest {
+  request: TTSRequest;
+  consumedNextFirstSentence?: ReadingCursor;
+}
+
+function isSameCursor(left: ReadingCursor | null, right: ReadingCursor): boolean {
+  return left?.pageNum === right.pageNum && left.sentenceIndex === right.sentenceIndex;
+}
 
 class PlaybackController {
   private activeRunId = 0;
@@ -26,7 +36,31 @@ class PlaybackController {
   private async ensureCursorReady(pageNum: number, sentenceIndex: number = 0): Promise<boolean> {
     const ready = await this.ensurePageSentences(pageNum);
     if (!ready) return false;
+
+    if (sentenceIndex === 0 && pageNum > 0) {
+      await this.ensurePageSentences(pageNum - 1);
+    }
+
     return readingSession.goToPageSentence(pageNum, sentenceIndex);
+  }
+
+  private async ensureContinuationPageForCursor(cursor: ReadingCursor): Promise<void> {
+    const sentence = readingSession.getSentenceAtCursor(cursor);
+    const pageSentences = readingSession.getPageSentences(cursor.pageNum);
+    const nextPage = cursor.pageNum + 1;
+
+    if (
+      !sentence ||
+      cursor.sentenceIndex !== pageSentences.length - 1 ||
+      nextPage >= pdfStore.totalPages() ||
+      hasTerminalSentencePunctuation(sentence.text)
+    ) {
+      readingSession.refreshContinuedHighlight();
+      return;
+    }
+
+    await this.ensurePageSentences(nextPage);
+    readingSession.refreshContinuedHighlight();
   }
 
   private getRequestForCursor(cursor: ReadingCursor): TTSRequest | null {
@@ -38,6 +72,64 @@ class PlaybackController {
       sentenceIndex: cursor.sentenceIndex,
       text: sentence.text,
     };
+  }
+
+  private async getSpokenRequestForCursor(cursor: ReadingCursor): Promise<SpokenRequest | null> {
+    const request = this.getRequestForCursor(cursor);
+    const sentence = readingSession.getSentenceAtCursor(cursor);
+    if (!request || !sentence) return null;
+
+    const pageSentences = readingSession.getPageSentences(cursor.pageNum);
+    const isLastSentenceOnPage = cursor.sentenceIndex === pageSentences.length - 1;
+    const nextPage = cursor.pageNum + 1;
+
+    if (!isLastSentenceOnPage || nextPage >= pdfStore.totalPages() || hasTerminalSentencePunctuation(sentence.text)) {
+      return { request };
+    }
+
+    const nextReady = await this.ensurePageSentences(nextPage);
+    if (!nextReady) return { request };
+
+    const nextSentence = readingSession.getSentenceAtCursor({ pageNum: nextPage, sentenceIndex: 0 });
+    if (!nextSentence) return { request };
+
+    return {
+      request: {
+        ...request,
+        text: joinSentenceParts(sentence.text, nextSentence.text),
+      },
+      consumedNextFirstSentence: { pageNum: nextPage, sentenceIndex: 0 },
+    };
+  }
+
+  private async advanceAfterSpokenRequest(spokenRequest: SpokenRequest, currentCursor: ReadingCursor): Promise<boolean> {
+    const consumedNextFirstSentence = spokenRequest.consumedNextFirstSentence;
+
+    if (consumedNextFirstSentence) {
+      const nextPageSentences = readingSession.getPageSentences(consumedNextFirstSentence.pageNum);
+      const nextSentenceIndex = consumedNextFirstSentence.sentenceIndex + 1;
+
+      if (nextSentenceIndex < nextPageSentences.length) {
+        readingSession.goToSentence(consumedNextFirstSentence.pageNum, nextSentenceIndex);
+        return true;
+      }
+
+      const followingPage = consumedNextFirstSentence.pageNum + 1;
+      if (followingPage >= pdfStore.totalPages()) return false;
+
+      return await this.ensureCursorReady(followingPage);
+    }
+
+    const nextCursor = readingSession.peekNextCursor();
+    if (nextCursor) {
+      readingSession.nextSentence();
+      return true;
+    }
+
+    const nextPage = currentCursor.pageNum + 1;
+    if (nextPage >= pdfStore.totalPages()) return false;
+
+    return await this.ensureCursorReady(nextPage);
   }
 
   private maybePrefetchNextPage(cursor: ReadingCursor): void {
@@ -87,6 +179,8 @@ class PlaybackController {
     const ready = await this.ensureCursorReady(visiblePage, targetSentenceIndex);
     if (!ready) return;
 
+    await this.ensureContinuationPageForCursor(readingSession.cursor());
+
     const runId = ++this.activeRunId;
     readingSession.setIsPlaying(true);
     this.prefetchAroundCursor();
@@ -96,6 +190,7 @@ class PlaybackController {
   stop(): void {
     this.activeRunId += 1;
     ttsService.stop();
+    readingSession.refreshContinuedHighlight();
     readingSession.setIsPlaying(false);
   }
 
@@ -104,11 +199,12 @@ class PlaybackController {
     if (wasPlaying) this.stop();
 
     const before = readingSession.cursor();
+    await this.ensureContinuationPageForCursor(readingSession.getLogicalStartCursor(before));
     readingSession.nextSentence();
 
     const after = readingSession.cursor();
     if (after.pageNum === before.pageNum && after.sentenceIndex === before.sentenceIndex) {
-      const nextPage = before.pageNum + 1;
+      const nextPage = readingSession.getLogicalEndCursor(before).pageNum + 1;
       if (await this.ensurePageSentences(nextPage)) {
         readingSession.nextSentence();
       }
@@ -146,30 +242,30 @@ class PlaybackController {
   private async runLoop(runId: number): Promise<void> {
     while (this.activeRunId === runId) {
       const currentCursor = readingSession.cursor();
-      const request = this.getRequestForCursor(currentCursor);
-      if (!request) break;
+      const spokenRequest = await this.getSpokenRequestForCursor(currentCursor);
+      if (!spokenRequest) break;
 
       this.prefetchAroundCursor();
+      const continuedHighlightCursor = spokenRequest.consumedNextFirstSentence ?? null;
+      readingSession.setContinuedHighlightCursor(continuedHighlightCursor);
 
       try {
-        await ttsService.play(request);
-
-        if (this.activeRunId !== runId) break;
-
-        const nextCursor = readingSession.peekNextCursor();
-        if (nextCursor) {
-          readingSession.nextSentence();
-          continue;
+        try {
+          await ttsService.play(spokenRequest.request);
+        } finally {
+          if (
+            continuedHighlightCursor &&
+            this.activeRunId === runId &&
+            isSameCursor(readingSession.continuedHighlightCursor(), continuedHighlightCursor)
+          ) {
+            readingSession.setContinuedHighlightCursor(null);
+          }
         }
 
-        const nextPage = currentCursor.pageNum + 1;
-        if (nextPage >= pdfStore.totalPages()) break;
-
-        const nextReady = await this.ensureCursorReady(nextPage);
-        if (!nextReady) break;
-
         if (this.activeRunId !== runId) break;
-        continue;
+
+        const advanced = await this.advanceAfterSpokenRequest(spokenRequest, currentCursor);
+        if (!advanced || this.activeRunId !== runId) break;
       } catch (err) {
         const msg = (err as Error).message;
         if (msg.includes('interrupted') || msg.includes('canceled')) break;
@@ -180,6 +276,7 @@ class PlaybackController {
     }
 
     if (this.activeRunId === runId) {
+      readingSession.setContinuedHighlightCursor(null);
       readingSession.setIsPlaying(false);
     }
   }

@@ -8,7 +8,7 @@ import { documentSession } from './services/documentSession';
 import { pdfHistory } from './services/pdfHistory';
 import { ttsService } from './services/ttsService';
 import { pdfStore } from './stores/pdfStore';
-import { readingSession } from './stores/readingSessionStore';
+import { DEFAULT_COLUMN_MODE, DEFAULT_FOOTER_MARGIN, DEFAULT_HEADER_MARGIN, readingSession } from './stores/readingSessionStore';
 import { playbackController } from './controllers/playbackController';
 import { addBook, deleteBook, getBookByPath, updateBook, getAllBooks, getMostRecentlyOpenedBook, removeLegacyPdfBlobs, type Book, type StoredPDFFileHandle } from './services/db';
 import './App.css';
@@ -46,6 +46,24 @@ function isAbortError(error: unknown): boolean {
 
 function isMissingFileError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'NotFoundError';
+}
+
+interface BookTtsLayoutSettings {
+  headerMargin: number;
+  footerMargin: number;
+  columnMode: number;
+}
+
+function getBookTtsLayoutSettings(book: Book): BookTtsLayoutSettings {
+  return {
+    headerMargin: book.headerMargin ?? DEFAULT_HEADER_MARGIN,
+    footerMargin: book.footerMargin ?? DEFAULT_FOOTER_MARGIN,
+    columnMode: book.columnMode ?? DEFAULT_COLUMN_MODE,
+  };
+}
+
+function hasMissingBookTtsLayoutSettings(book: Book): boolean {
+  return book.headerMargin == null || book.footerMargin == null || book.columnMode == null;
 }
 
 interface ReopenStoredBookOptions {
@@ -122,9 +140,9 @@ const App: Component = () => {
           lastPageOffsetY: 0,
           lastSentence: 0,
           zoomLevel: 2.5,
-          headerMargin: 50,
-          footerMargin: 60,
-          columnMode: 1,
+          headerMargin: DEFAULT_HEADER_MARGIN,
+          footerMargin: DEFAULT_FOOTER_MARGIN,
+          columnMode: DEFAULT_COLUMN_MODE,
           lastOpened: Date.now(),
           fileHandle: bookMeta.fileHandle,
         });
@@ -141,23 +159,31 @@ const App: Component = () => {
       }
 
       if (book) {
+        const ttsLayoutSettings = getBookTtsLayoutSettings(book);
+        const restoredBook = { ...book, ...ttsLayoutSettings };
         const maxPage = Math.max(0, documentSession.numPages - 1);
         const restoredPage = Math.max(0, Math.min(book.lastPage, maxPage));
         const restoredOffsetY = Math.max(0, book.lastPageOffsetY ?? 0);
         const restoredSentence = Math.max(0, book.lastSentence);
 
         batch(() => {
-          pdfStore.setCurrentBook(book);
+          pdfStore.setCurrentBook(restoredBook);
           pdfStore.setZoomLevel(book.zoomLevel);
-          readingSession.setHeaderMargin(book.headerMargin);
-          readingSession.setFooterMargin(book.footerMargin);
-          readingSession.setColumnMode(book.columnMode);
+          readingSession.setHeaderMargin(ttsLayoutSettings.headerMargin);
+          readingSession.setFooterMargin(ttsLayoutSettings.footerMargin);
+          readingSession.setColumnMode(ttsLayoutSettings.columnMode);
           pdfStore.setTOC(toc);
           readingSession.goToSentence(restoredPage, restoredSentence);
           pdfStore.goToPage(restoredPage, restoredOffsetY);
           pdfStore.startLinkHistory(restoredPage, restoredOffsetY);
           pdfStore.setTotalPages(documentSession.numPages);
         });
+
+        if (book.id !== undefined && hasMissingBookTtsLayoutSettings(book)) {
+          void updateBook(book.id, ttsLayoutSettings).catch(error => {
+            console.error('Failed to backfill TTS layout settings:', error);
+          });
+        }
       }
 
     } catch (err) {
@@ -291,6 +317,41 @@ const App: Component = () => {
     });
   }
 
+  let ttsLayoutPersistInFlight = false;
+  let ttsLayoutPersistQueued = false;
+
+  function queueTtsLayoutSave(): void {
+    const book = pdfStore.currentBook();
+    if (!book?.id) return;
+
+    ttsLayoutPersistQueued = true;
+    if (ttsLayoutPersistInFlight) return;
+
+    ttsLayoutPersistInFlight = true;
+    void flushTtsLayoutSave();
+  }
+
+  async function flushTtsLayoutSave(): Promise<void> {
+    try {
+      while (ttsLayoutPersistQueued) {
+        ttsLayoutPersistQueued = false;
+        const book = pdfStore.currentBook();
+        if (!book?.id) continue;
+
+        await updateBook(book.id, {
+          headerMargin: readingSession.headerMargin(),
+          footerMargin: readingSession.footerMargin(),
+          columnMode: readingSession.columnMode(),
+        });
+      }
+    } catch (error) {
+      console.error('Failed to save TTS layout settings:', error);
+    } finally {
+      ttsLayoutPersistInFlight = false;
+      if (ttsLayoutPersistQueued) queueTtsLayoutSave();
+    }
+  }
+
   createEffect(() => {
     const book = pdfStore.currentBook();
     const zoom = pdfStore.zoomLevel();
@@ -322,6 +383,15 @@ const App: Component = () => {
     persistTimer = window.setTimeout(async () => {
       await saveProgressNow();
     }, 2000);
+  });
+
+  createEffect(() => {
+    pdfStore.currentBook();
+    readingSession.headerMargin();
+    readingSession.footerMargin();
+    readingSession.columnMode();
+
+    queueTtsLayoutSave();
   });
 
   createEffect(() => {

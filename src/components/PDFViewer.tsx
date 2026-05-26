@@ -6,6 +6,7 @@ import { pdfStore } from '../stores/pdfStore';
 import { readingSession } from '../stores/readingSessionStore';
 import { playbackController } from '../controllers/playbackController';
 import type { PageDims } from '../services/documentSession';
+import type { Sentence } from '../services/readingTypes';
 import type { PageBounds, PDFLink, PDFQuad, Word } from '../pdf/types';
 
 interface Props {
@@ -45,6 +46,12 @@ interface PageSelectionState {
   text: string;
 }
 
+interface TtsMarginGuide {
+  kind: 'header' | 'footer';
+  y: number;
+  height: number;
+}
+
 interface ActiveDragSelection {
   pageNum: number;
   pointerId: number;
@@ -79,6 +86,7 @@ export const PDFViewer: Component<Props> = (props) => {
   let pendingHoverClientY = 0;
   let initialRevealTimeout: number | null = null;
   let initialRevealFrame: number | null = null;
+  let ttsMarginGuideTimeout: number | null = null;
 
   const PAGE_GAP = 20;
   const VIEWER_PADDING = 20;
@@ -88,6 +96,9 @@ export const PDFViewer: Component<Props> = (props) => {
   const KEYBOARD_SCROLL_RAMP_MS = 450;
   const KEYBOARD_INITIAL_SPEED_FACTOR = 0.18;
   const MAX_KEYBOARD_SCROLL_DT = 0.05;
+  const TTS_MARGIN_GUIDE_VISIBLE_MS = 1300;
+
+  const [showTtsMarginGuides, setShowTtsMarginGuides] = createSignal(false);
 
   function clearInitialRevealTimers() {
     if (initialRevealTimeout !== null) {
@@ -99,6 +110,22 @@ export const PDFViewer: Component<Props> = (props) => {
       window.cancelAnimationFrame(initialRevealFrame);
       initialRevealFrame = null;
     }
+  }
+
+  function clearTtsMarginGuideTimer() {
+    if (ttsMarginGuideTimeout !== null) {
+      window.clearTimeout(ttsMarginGuideTimeout);
+      ttsMarginGuideTimeout = null;
+    }
+  }
+
+  function showTtsMarginGuidesBriefly() {
+    clearTtsMarginGuideTimer();
+    setShowTtsMarginGuides(true);
+    ttsMarginGuideTimeout = window.setTimeout(() => {
+      ttsMarginGuideTimeout = null;
+      setShowTtsMarginGuides(false);
+    }, TTS_MARGIN_GUIDE_VISIBLE_MS);
   }
 
   function isInitialRevealHidden(): boolean {
@@ -833,6 +860,15 @@ export const PDFViewer: Component<Props> = (props) => {
   ));
 
   createEffect(on(
+    () => [readingSession.headerMargin(), readingSession.footerMargin()] as const,
+    (_margins, previousValue) => {
+      if (previousValue === undefined) return;
+      showTtsMarginGuidesBriefly();
+    },
+    { defer: true }
+  ));
+
+  createEffect(on(
     () => visibleRange(),
     (range) => {
       if (range.firstVisible < 0) return;
@@ -895,6 +931,7 @@ export const PDFViewer: Component<Props> = (props) => {
     if (userScrollTimeout) clearTimeout(userScrollTimeout);
     clearSelection();
     clearInitialRevealTimers();
+    clearTtsMarginGuideTimer();
     stopKeyboardScroll();
     window.removeEventListener('copy', handleCopy);
     window.removeEventListener('keydown', handleKeyDown);
@@ -955,14 +992,11 @@ export const PDFViewer: Component<Props> = (props) => {
     { defer: true }
   ));
 
-  function getHighlightRects(pageNum: number): { x0: number; y0: number; x1: number; y1: number }[] {
-    const sentence = readingSession.getCurrentSentence();
-    if (!sentence || sentence.pageNum !== pageNum) {
-      return [];
-    }
-
+  function addSentenceHighlightRects(
+    sentence: Sentence,
+    lines: { x0: number; y0: number; x1: number; y1: number }[]
+  ): void {
     const lineThreshold = 5;
-    const lines: { x0: number; y0: number; x1: number; y1: number }[] = [];
 
     for (const word of sentence.words) {
       const existingLine = lines.find(line => Math.abs(line.y0 - word.y0) < lineThreshold);
@@ -976,8 +1010,47 @@ export const PDFViewer: Component<Props> = (props) => {
         lines.push({ x0: word.x0, y0: word.y0, x1: word.x1, y1: word.y1 });
       }
     }
+  }
+
+  function getHighlightRects(pageNum: number): { x0: number; y0: number; x1: number; y1: number }[] {
+    const sentences = [
+      readingSession.getCurrentSentence(),
+      readingSession.getContinuedHighlightSentence(),
+    ].filter((sentence): sentence is Sentence => !!sentence && sentence.pageNum === pageNum);
+
+    if (sentences.length === 0) {
+      return [];
+    }
+
+    const lines: { x0: number; y0: number; x1: number; y1: number }[] = [];
+
+    for (const sentence of sentences) {
+      addSentenceHighlightRects(sentence, lines);
+    }
 
     return lines;
+  }
+
+  function getTtsMarginGuides(pageNum: number, bounds: PageBounds): TtsMarginGuide[] {
+    const range = visibleRange();
+    if (!showTtsMarginGuides() || range.firstVisible < 0 || pageNum < range.firstVisible || pageNum > range.lastVisible) {
+      return [];
+    }
+
+    const scale = pdfStore.zoomLevel();
+    const headerHeight = Math.min(bounds.height, Math.max(0, readingSession.headerMargin() / scale));
+    const footerHeight = Math.min(bounds.height, Math.max(0, readingSession.footerMargin() / scale));
+    const guides: TtsMarginGuide[] = [];
+
+    if (headerHeight > 0) {
+      guides.push({ kind: 'header', y: bounds.y0, height: headerHeight });
+    }
+
+    if (footerHeight > 0) {
+      guides.push({ kind: 'footer', y: bounds.y0 + bounds.height - footerHeight, height: footerHeight });
+    }
+
+    return guides;
   }
 
   function getSelectionQuads(pageNum: number): PDFQuad[] {
@@ -1141,6 +1214,23 @@ export const PDFViewer: Component<Props> = (props) => {
               preserveAspectRatio="none"
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', 'pointer-events': 'none', overflow: 'visible' }}
             >
+              <g opacity="0.22">
+                <For each={getTtsMarginGuides(pageProps.pageNum, bounds())}>
+                  {(guide) => (
+                    <rect
+                      x={bounds().x0}
+                      y={guide.y}
+                      width={bounds().width}
+                      height={guide.height}
+                      fill={guide.kind === 'header' ? '#38bdf8' : '#fb7185'}
+                      stroke={guide.kind === 'header' ? '#0284c7' : '#e11d48'}
+                      stroke-width="2"
+                      vector-effect="non-scaling-stroke"
+                      pointer-events="none"
+                    />
+                  )}
+                </For>
+              </g>
               <g>
                 <For each={getSelectionQuads(pageProps.pageNum)}>
                   {(quad) => renderSelectionQuad(quad)}
