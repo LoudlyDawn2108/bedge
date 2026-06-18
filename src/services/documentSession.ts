@@ -246,8 +246,13 @@ export class DocumentSession {
     return this.pageLinksCache.get(pageNum) ?? null;
   }
 
-  async renderPage(pageNum: number, canvas: HTMLCanvasElement, scale: number): Promise<{ width: number; height: number; bounds: PageBounds }> {
-    return this.loadPage(pageNum, canvas, scale);
+  async renderPage(
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    pixelRatio = 1
+  ): Promise<{ width: number; height: number; bounds: PageBounds }> {
+    return this.loadPage(pageNum, canvas, scale, pixelRatio);
   }
 
   async beginSelection(pageNum: number): Promise<void> {
@@ -287,9 +292,8 @@ export class DocumentSession {
     }
   }
 
-  preloadPageText(pageNum: number, width: number, height: number, scale: number): void {
+  preloadPageText(pageNum: number, dims: PageDims): void {
     const token = this.sessionToken;
-    const dims: PageDims = { width: width / scale, height: height / scale };
 
     void this.getPageText(pageNum)
       .then(words => {
@@ -301,10 +305,15 @@ export class DocumentSession {
       });
   }
 
-  async loadPage(pageNum: number, canvas: HTMLCanvasElement, scale: number): Promise<{ width: number; height: number; bounds: PageBounds }> {
+  async loadPage(
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    pixelRatio = 1
+  ): Promise<{ width: number; height: number; bounds: PageBounds }> {
     const documentId = this.requireDocumentId();
     const token = this.sessionToken;
-    const renderedPage = await pdfWorkerClient.renderPage(documentId, pageNum, scale);
+    const renderedPage = await pdfWorkerClient.renderPage(documentId, pageNum, scale, pixelRatio);
     const metrics: PageMetrics = {
       bounds: renderedPage.bounds,
       dimensions: {
@@ -316,10 +325,14 @@ export class DocumentSession {
     if (token === this.sessionToken && documentId === this.documentId) {
       this.cachePageMetrics(pageNum, metrics);
       await drawRenderedPage(canvas, renderedPage);
-      this.preloadPageText(pageNum, renderedPage.width, renderedPage.height, scale);
+      this.preloadPageText(pageNum, metrics.dimensions);
     }
 
-    return { width: renderedPage.width, height: renderedPage.height, bounds: renderedPage.bounds };
+    return {
+      width: metrics.dimensions.width * scale,
+      height: metrics.dimensions.height * scale,
+      bounds: renderedPage.bounds,
+    };
   }
 
   private async ensureSelection(pageNum: number): Promise<number | null> {

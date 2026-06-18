@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
+import type { TextFitProfile } from './textFitProfile';
 
 // Book record stored in IndexedDB
 export interface StoredPDFFileHandle {
@@ -21,6 +22,7 @@ export interface Book {
   headerMargin: number;
   footerMargin: number;
   columnMode: number; // 1 = single, 2 = two-column
+  textFitProfile?: TextFitProfile;
   lastOpened: number; // timestamp
   fileHandle?: StoredPDFFileHandle;
   thumbnailBlob?: Blob;
@@ -56,6 +58,10 @@ export async function addBook(book: Omit<Book, 'id'>): Promise<number> {
 
 export async function updateBook(id: number, updates: Partial<Book>): Promise<void> {
   await db.books.update(id, { ...updates, lastOpened: Date.now() });
+}
+
+export async function updateBookTextFitProfile(id: number, textFitProfile: TextFitProfile): Promise<void> {
+  await db.books.update(id, { textFitProfile });
 }
 
 export async function getBookByPath(path: string): Promise<Book | undefined> {

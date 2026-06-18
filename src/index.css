@@ -6,6 +6,7 @@
 
 html, body {
   height: 100%;
+  min-height: 100dvh;
   width: 100%;
   overflow: hidden;
 }
@@ -15,9 +16,11 @@ body {
   line-height: 1.5;
   color: #efefef;
   background-color: #1e1e1e;
+  overscroll-behavior: none;
 }
 
 #root {
   height: 100%;
+  min-height: 100dvh;
   width: 100%;
 }

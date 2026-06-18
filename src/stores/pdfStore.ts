@@ -2,6 +2,7 @@ import { batch, createSignal, createRoot } from 'solid-js';
 import type { TOCItem } from '../pdf/types';
 import type { Book } from '../services/db';
 import { pdfHistory } from '../services/pdfHistory';
+import { DEFAULT_ZOOM_LEVEL, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, ZOOM_STEP, clampZoomLevel } from '../utils/zoom';
 
 interface NavigationLocation {
   pageNum: number;
@@ -18,7 +19,7 @@ function createPDFStore() {
   const [totalPages, setTotalPages] = createSignal(0);
   const [currentPage, setCurrentPage] = createSignal(0);
   const [currentPageOffsetY, setCurrentPageOffsetY] = createSignal(0);
-  const [zoomLevel, setZoomLevel] = createSignal(2.5);
+  const [zoomLevel, setZoomLevelSignal] = createSignal(DEFAULT_ZOOM_LEVEL);
   const [brightness, setBrightness] = createSignal(1.0);
   
   // Navigation target (set to request a scroll, null means no pending navigation)
@@ -53,12 +54,16 @@ function createPDFStore() {
     return loadedPages().has(pageNum);
   }
   
+  function setZoomLevel(value: number) {
+    setZoomLevelSignal(clampZoomLevel(value));
+  }
+
   function zoomIn() {
-    setZoomLevel(prev => Math.min(prev + 0.5, 4.0));
+    setZoomLevelSignal(prev => Math.min(prev + ZOOM_STEP, MAX_ZOOM_LEVEL));
   }
   
   function zoomOut() {
-    setZoomLevel(prev => Math.max(prev - 0.5, 0.5));
+    setZoomLevelSignal(prev => Math.max(prev - ZOOM_STEP, MIN_ZOOM_LEVEL));
   }
   
   function toggleSidebar() {

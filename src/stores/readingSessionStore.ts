@@ -8,6 +8,18 @@ import { pdfStore } from './pdfStore';
 export const DEFAULT_COLUMN_MODE = 1;
 export const DEFAULT_HEADER_MARGIN = 50;
 export const DEFAULT_FOOTER_MARGIN = 175;
+export const TTS_MARGIN_MIN = 0;
+export const TTS_MARGIN_MAX = 240;
+export const TTS_MARGIN_STEP = 5;
+
+export function clampTtsMargin(value: number): number {
+  if (!Number.isFinite(value)) return TTS_MARGIN_MIN;
+  return Math.max(TTS_MARGIN_MIN, Math.min(TTS_MARGIN_MAX, value));
+}
+
+export function readTtsMarginInput(value: string): number {
+  return clampTtsMargin(Number(value));
+}
 
 export interface ReadingCursor {
   pageNum: number;

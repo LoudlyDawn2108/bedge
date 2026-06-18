@@ -392,14 +392,15 @@ export class MuPdfEngine {
     }
   }
 
-  renderPage(documentId: number, pageNum: number, scale: number): RenderedPage {
+  renderPage(documentId: number, pageNum: number, scale: number, pixelRatio: number): RenderedPage {
     const page = this.loadPage(documentId, pageNum);
     let pixmap: mupdf.Pixmap | null = null;
 
     try {
       const bounds = toPageBounds(page.getBounds());
+      const renderScale = scale * pixelRatio;
       pixmap = page.toPixmap(
-        mupdf.Matrix.scale(scale, scale),
+        mupdf.Matrix.scale(renderScale, renderScale),
         mupdf.ColorSpace.DeviceRGB,
         true,
         true

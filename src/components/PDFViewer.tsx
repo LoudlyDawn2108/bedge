@@ -8,10 +8,26 @@ import { playbackController } from '../controllers/playbackController';
 import type { PageDims } from '../services/documentSession';
 import type { Sentence } from '../services/readingTypes';
 import type { PageBounds, PDFLink, PDFQuad, Word } from '../pdf/types';
+import { isTextFitProfileUsable, type TextFitProfile } from '../services/textFitProfile';
+import { computeFitTextZoom, computeFitWidthZoom } from '../utils/zoom';
 
 interface Props {
   onPageChange?: (page: number) => void;
   shortcutsEnabled?: boolean;
+  fitWidthRequest?: number;
+  fitTextRequest?: number;
+  textFitProfile?: TextFitProfile;
+  mobileLayout?: boolean;
+  readerTopInset?: number;
+  readerBottomInset?: number;
+  onReaderTap?: () => void;
+}
+
+interface PendingReaderTap {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  scrollTop: number;
 }
 
 interface RenderedPageSize {
@@ -70,6 +86,7 @@ export const PDFViewer: Component<Props> = (props) => {
   const [selection, setSelection] = createSignal<PageSelectionState | null>(null);
   const [hoverCursorPage, setHoverCursorPage] = createSignal<number | null>(null);
   const [pageLinks, setPageLinks] = createSignal<Record<number, PDFLink[]>>({});
+  const [fitTextShiftPx, setFitTextShiftPx] = createSignal(0);
   const renderingPages: Map<number, RenderJob> = new Map();
   let renderEpoch = 0;
   const [initialRevealGate, setInitialRevealGate] = createSignal<InitialRevealGate>({
@@ -87,11 +104,22 @@ export const PDFViewer: Component<Props> = (props) => {
   let initialRevealTimeout: number | null = null;
   let initialRevealFrame: number | null = null;
   let ttsMarginGuideTimeout: number | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+  let observedVisualViewport: VisualViewport | null = null;
+  let preserveFitTextShiftForNextZoom = false;
+  let renderPixelRatio = getRenderPixelRatio();
 
   const PAGE_GAP = 20;
   const VIEWER_PADDING = 20;
   const PAGES_PER_BATCH = 5;
   const INITIAL_REVEAL_FAIL_OPEN_MS = 5000;
+  const FIT_ZOOM_DELTA = 0.01;
+  const MOBILE_TEXT_FIT_EDGE_MARGIN = 5;
+  const TEXT_FIT_MAX_CENTER_SHIFT_RATIO = 0.2;
+  const READER_TAP_MAX_MOVE_PX = 10;
+  const READER_TAP_MAX_SCROLL_DELTA_PX = 6;
+  const READER_TAP_MIDDLE_START_RATIO = 0.25;
+  const READER_TAP_MIDDLE_END_RATIO = 0.75;
   const KEYBOARD_HOLD_SCROLL_SPEED = 1100;
   const KEYBOARD_SCROLL_RAMP_MS = 450;
   const KEYBOARD_INITIAL_SPEED_FACTOR = 0.18;
@@ -99,6 +127,110 @@ export const PDFViewer: Component<Props> = (props) => {
   const TTS_MARGIN_GUIDE_VISIBLE_MS = 1300;
 
   const [showTtsMarginGuides, setShowTtsMarginGuides] = createSignal(false);
+  let pendingReaderTap: PendingReaderTap | null = null;
+
+  function getRenderPixelRatio(): number {
+    const ratio = window.devicePixelRatio;
+    return Number.isFinite(ratio) && ratio > 0 ? Math.max(1, ratio) : 1;
+  }
+
+  function syncRenderPixelRatio(): boolean {
+    const nextPixelRatio = getRenderPixelRatio();
+    if (Math.abs(nextPixelRatio - renderPixelRatio) < 0.001) return false;
+
+    renderPixelRatio = nextPixelRatio;
+    return true;
+  }
+
+  function handleViewportEnvironmentChange(): void {
+    if (syncRenderPixelRatio()) {
+      resetViewerState({ preserveSelection: true });
+    }
+
+    scheduleViewportSync();
+  }
+
+  function getReaderTopInset(): number {
+    return Math.max(0, props.readerTopInset ?? 0);
+  }
+
+  function getReaderBottomInset(): number {
+    return Math.max(0, props.readerBottomInset ?? 0);
+  }
+
+  function getReaderTopSpacing(): number {
+    return VIEWER_PADDING + getReaderTopInset();
+  }
+
+  function getReaderBottomSpacing(): number {
+    return VIEWER_PADDING + getReaderBottomInset();
+  }
+
+  function getHorizontalViewerPadding(): number {
+    return props.mobileLayout ? 0 : VIEWER_PADDING;
+  }
+
+  function getHorizontalFitPadding(): number {
+    return getHorizontalViewerPadding() * 2;
+  }
+
+  function getFitTextHorizontalPadding(): number {
+    const mobileTextInset = props.mobileLayout ? MOBILE_TEXT_FIT_EDGE_MARGIN * 2 : 0;
+    return getHorizontalFitPadding() + mobileTextInset;
+  }
+
+  function getSafeViewportBand(containerHeight: number): { top: number; bottom: number; height: number } {
+    const top = getReaderTopInset() + VIEWER_PADDING;
+    const bottom = Math.max(top + 1, containerHeight - getReaderBottomInset() - VIEWER_PADDING);
+    return { top, bottom, height: bottom - top };
+  }
+
+  function isMiddleReaderTap(clientY: number): boolean {
+    if (!containerRef) return false;
+    const rect = containerRef.getBoundingClientRect();
+    if (rect.height <= 0) return false;
+
+    const y = clientY - rect.top;
+    return y >= rect.height * READER_TAP_MIDDLE_START_RATIO
+      && y <= rect.height * READER_TAP_MIDDLE_END_RATIO;
+  }
+
+  function handleReaderPointerDown(event: PointerEvent): void {
+    if (event.pointerType !== 'touch') return;
+    if (!containerRef) return;
+
+    pendingReaderTap = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollTop: containerRef.scrollTop,
+    };
+  }
+
+  function clearPendingReaderTap(event?: PointerEvent): void {
+    if (!event || pendingReaderTap?.pointerId === event.pointerId) {
+      pendingReaderTap = null;
+    }
+  }
+
+  function handleReaderPointerUp(event: PointerEvent): void {
+    if (event.pointerType !== 'touch') return;
+    if (!containerRef) return;
+
+    const tap = pendingReaderTap;
+    clearPendingReaderTap(event);
+    if (!tap || tap.pointerId !== event.pointerId) return;
+
+    const moveX = event.clientX - tap.clientX;
+    const moveY = event.clientY - tap.clientY;
+    const moved = Math.hypot(moveX, moveY);
+    const scrollDelta = Math.abs(containerRef.scrollTop - tap.scrollTop);
+
+    if (moved > READER_TAP_MAX_MOVE_PX || scrollDelta > READER_TAP_MAX_SCROLL_DELTA_PX) return;
+    if (!isMiddleReaderTap(event.clientY)) return;
+
+    props.onReaderTap?.();
+  }
 
   function clearInitialRevealTimers() {
     if (initialRevealTimeout !== null) {
@@ -485,6 +617,28 @@ export const PDFViewer: Component<Props> = (props) => {
     });
   }
 
+  function getRoundedContainerWidth(): number | null {
+    if (!containerRef) return null;
+    const width = Math.round(containerRef.clientWidth);
+    return width > 0 ? width : null;
+  }
+
+  function getUsableTextFitProfile(): TextFitProfile | null {
+    const pageCount = pdfStore.totalPages();
+    return isTextFitProfileUsable(props.textFitProfile, pageCount) ? props.textFitProfile : null;
+  }
+
+  function clearFitTextShift(): void {
+    preserveFitTextShiftForNextZoom = false;
+    setFitTextShiftPx(0);
+  }
+
+  function getFitTextShift(pageWidthPx: number, profile: TextFitProfile): number {
+    const maxShift = pageWidthPx * TEXT_FIT_MAX_CENTER_SHIFT_RATIO;
+    const targetShift = (0.5 - profile.centerRatio) * pageWidthPx;
+    return Math.max(-maxShift, Math.min(maxShift, targetShift));
+  }
+
   function isShortcutBlockedTarget(target: EventTarget | null): boolean {
     if (!(target instanceof Element)) return false;
 
@@ -659,9 +813,11 @@ export const PDFViewer: Component<Props> = (props) => {
       return { firstVisible: -1, lastVisible: -1, start: 0, end: 0 };
     }
 
-    const scrollBottom = scrollTop + Math.max(viewHeight, 1);
+    const visibleTop = scrollTop + getReaderTopInset();
+    const visibleHeight = Math.max(1, viewHeight - getReaderTopInset() - getReaderBottomInset());
+    const scrollBottom = visibleTop + visibleHeight;
     const sizes = pageSizes();
-    let currentTop = VIEWER_PADDING;
+    let currentTop = getReaderTopSpacing();
     let firstVisible = -1;
     let lastVisible = -1;
 
@@ -669,7 +825,7 @@ export const PDFViewer: Component<Props> = (props) => {
       const pageHeight = getPageHeight(i, sizes);
       const pageBottom = currentTop + pageHeight;
 
-      if (pageBottom > scrollTop && currentTop < scrollBottom) {
+      if (pageBottom > visibleTop && currentTop < scrollBottom) {
         if (firstVisible === -1) firstVisible = i;
         lastVisible = i;
       }
@@ -736,7 +892,8 @@ export const PDFViewer: Component<Props> = (props) => {
 
     try {
       const scale = pdfStore.zoomLevel();
-      const { width, height, bounds } = await documentSession.loadPage(pageNum, canvas, scale);
+      const pixelRatio = renderPixelRatio;
+      const { width, height, bounds } = await documentSession.loadPage(pageNum, canvas, scale, pixelRatio);
       const activeJob = renderingPages.get(pageNum);
 
       if (epoch !== renderEpoch) return;
@@ -783,7 +940,7 @@ export const PDFViewer: Component<Props> = (props) => {
   function scrollToPage(pageNum: number, yInPage?: number) {
     if (!containerRef) return;
 
-    let targetY = Math.max(0, getPageTopY(pageNum) - VIEWER_PADDING);
+    let targetY = Math.max(0, getPageTopY(pageNum) - getReaderTopSpacing());
 
     // Add y offset within page if provided (scale by zoom level)
     if (yInPage !== undefined) {
@@ -793,6 +950,74 @@ export const PDFViewer: Component<Props> = (props) => {
 
     containerRef.scrollTo({ top: targetY, behavior: 'auto' });
     syncViewport();
+  }
+
+  function restoreViewportPosition(pageNum: number, yInPage: number) {
+    scrollToPage(pageNum, yInPage);
+    pdfStore.setCurrentViewportPosition(pageNum, yInPage);
+  }
+
+  async function getFitWidthPageDims(): Promise<PageDims | null> {
+    const dims = estimatedPageDims();
+    if (dims) return dims;
+
+    const currentPage = pdfStore.currentPage();
+    if (currentPage < 0 || pdfStore.totalPages() <= 0) return null;
+
+    return documentSession.getPageDimensions(currentPage);
+  }
+
+  async function applyFitWidthZoom() {
+    if (!containerRef) return;
+
+    const dims = await getFitWidthPageDims();
+    if (!dims) return;
+
+    const containerWidth = getRoundedContainerWidth();
+    if (containerWidth === null) return;
+
+    const zoom = computeFitWidthZoom(containerWidth, dims.width, getHorizontalFitPadding());
+    if (zoom === null) return;
+
+    clearFitTextShift();
+
+    if (Math.abs(zoom - pdfStore.zoomLevel()) < FIT_ZOOM_DELTA) {
+      return;
+    }
+
+    pdfStore.setZoomLevel(zoom);
+  }
+
+  async function applyFitTextZoom() {
+    if (!containerRef) return;
+
+    const profile = getUsableTextFitProfile();
+    if (!profile) {
+      await applyFitWidthZoom();
+      return;
+    }
+
+    const dims = await getFitWidthPageDims();
+    if (!dims) return;
+
+    const containerWidth = getRoundedContainerWidth();
+    if (containerWidth === null) return;
+
+    const zoom = computeFitTextZoom(containerWidth, dims.width, profile.widthRatio, getFitTextHorizontalPadding());
+    if (zoom === null) {
+      await applyFitWidthZoom();
+      return;
+    }
+
+    const nextShift = getFitTextShift(dims.width * zoom, profile);
+    setFitTextShiftPx(nextShift);
+
+    if (Math.abs(zoom - pdfStore.zoomLevel()) < FIT_ZOOM_DELTA) {
+      return;
+    }
+
+    preserveFitTextShiftForNextZoom = true;
+    pdfStore.setZoomLevel(zoom);
   }
 
   async function applyNavigationTarget(pageNum: number, yPos: number | undefined, epoch: number) {
@@ -810,7 +1035,7 @@ export const PDFViewer: Component<Props> = (props) => {
 
   function getPageOffsetY(pageNum: number, scrollTop: number): number {
     const bounds = getPageBounds(pageNum);
-    const offsetY = Math.max(0, (scrollTop - (getPageTopY(pageNum) - VIEWER_PADDING)) / pdfStore.zoomLevel());
+    const offsetY = Math.max(0, (scrollTop - (getPageTopY(pageNum) - getReaderTopSpacing())) / pdfStore.zoomLevel());
     return (bounds?.y0 ?? 0) + offsetY;
   }
 
@@ -819,6 +1044,7 @@ export const PDFViewer: Component<Props> = (props) => {
     async ([book, totalPages], previousValue) => {
       if (totalPages <= 0) {
         setEstimatedPageDims(null);
+        clearFitTextShift();
         resetViewerState({ resetScroll: true });
         setViewport({ scrollTop: 0, viewHeight: 0 });
         return;
@@ -826,6 +1052,7 @@ export const PDFViewer: Component<Props> = (props) => {
 
       if (!book && previousValue === undefined) return;
 
+      clearFitTextShift();
       const epoch = resetViewerState({ resetScroll: true });
       await refreshEstimatedPageDims(epoch);
       if (epoch !== renderEpoch) return;
@@ -840,13 +1067,36 @@ export const PDFViewer: Component<Props> = (props) => {
     async (zoomLevel, prevZoom) => {
       // Skip if zoom didn't actually change
       if (prevZoom !== undefined && zoomLevel === prevZoom) return;
+      const shouldPreserveFitTextShift = preserveFitTextShiftForNextZoom;
+      preserveFitTextShiftForNextZoom = false;
+      if (!shouldPreserveFitTextShift) setFitTextShiftPx(0);
+      const pageNum = pdfStore.currentPage();
+      const yInPage = pdfStore.currentPageOffsetY();
       const epoch = resetViewerState({ preserveSelection: true });
       readingSession.clearAllSentences();
       await refreshEstimatedPageDims(epoch);
       if (epoch !== renderEpoch) return;
-      syncViewport();
+      restoreViewportPosition(pageNum, yInPage);
     },
     { defer: true } // Don't run on initial mount
+  ));
+
+  createEffect(on(
+    () => props.fitWidthRequest,
+    (request, previousRequest) => {
+      if (!request || request === previousRequest) return;
+      void applyFitWidthZoom();
+    },
+    { defer: true }
+  ));
+
+  createEffect(on(
+    () => props.fitTextRequest,
+    (request, previousRequest) => {
+      if (!request || request === previousRequest) return;
+      void applyFitTextZoom();
+    },
+    { defer: true }
   ));
 
   createEffect(on(
@@ -919,7 +1169,15 @@ export const PDFViewer: Component<Props> = (props) => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', stopKeyboardScroll);
-    window.addEventListener('resize', scheduleViewportSync);
+    renderPixelRatio = getRenderPixelRatio();
+    window.addEventListener('resize', handleViewportEnvironmentChange);
+    if (containerRef && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(scheduleViewportSync);
+      resizeObserver.observe(containerRef);
+    }
+    observedVisualViewport = window.visualViewport ?? null;
+    observedVisualViewport?.addEventListener('resize', handleViewportEnvironmentChange);
+    observedVisualViewport?.addEventListener('scroll', scheduleViewportSync);
     document.addEventListener('visibilitychange', handleVisibilityChange);
   });
 
@@ -927,6 +1185,9 @@ export const PDFViewer: Component<Props> = (props) => {
     if (viewportRaf !== null) {
       window.cancelAnimationFrame(viewportRaf);
     }
+    resizeObserver?.disconnect();
+    observedVisualViewport?.removeEventListener('resize', handleViewportEnvironmentChange);
+    observedVisualViewport?.removeEventListener('scroll', scheduleViewportSync);
     clearHoverCursor();
     if (userScrollTimeout) clearTimeout(userScrollTimeout);
     clearSelection();
@@ -937,7 +1198,7 @@ export const PDFViewer: Component<Props> = (props) => {
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
     window.removeEventListener('blur', stopKeyboardScroll);
-    window.removeEventListener('resize', scheduleViewportSync);
+    window.removeEventListener('resize', handleViewportEnvironmentChange);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
   });
 
@@ -954,7 +1215,7 @@ export const PDFViewer: Component<Props> = (props) => {
   // Helper to get Y offset for a page
   function getPageTopY(pageNum: number): number {
     const sizes = pageSizes();
-    let y = VIEWER_PADDING;
+    let y = getReaderTopSpacing();
     for (let i = 0; i < pageNum; i++) {
       y += getPageHeight(i, sizes) + PAGE_GAP;
     }
@@ -976,14 +1237,15 @@ export const PDFViewer: Component<Props> = (props) => {
       const scale = pdfStore.zoomLevel();
       const containerHeight = containerRef.clientHeight;
       const scrollTop = containerRef.scrollTop;
+      const safeBand = getSafeViewportBand(containerHeight);
       const pageTopY = getPageTopY(sentence.pageNum);
       const bounds = getPageBounds(sentence.pageNum);
       const sentenceY = pageTopY + (sentence.words[0].y0 - (bounds?.y0 ?? 0)) * scale;
       const sentenceViewportY = sentenceY - scrollTop;
-      const threshold = containerHeight * 0.8;
-      const targetPosition = containerHeight * 0.2;
+      const threshold = safeBand.top + safeBand.height * 0.8;
+      const targetPosition = safeBand.top + safeBand.height * 0.2;
 
-      if (sentenceViewportY > threshold || sentenceViewportY < 0) {
+      if (sentenceViewportY > threshold || sentenceViewportY < safeBand.top) {
         const newScrollTop = sentenceY - targetPosition;
         containerRef.scrollTo({ top: Math.max(0, newScrollTop), behavior: 'instant' });
         syncViewport();
@@ -1063,6 +1325,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function handlePointerDown(pageNum: number, event: PointerEvent) {
+    if (event.pointerType === 'touch') return;
     if (event.button !== 0) return;
 
     const point = getPointFromPointer(pageNum, event.clientX, event.clientY);
@@ -1094,6 +1357,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function handlePointerMove(pageNum: number, event: PointerEvent) {
+    if (event.pointerType === 'touch') return;
     const drag = activeDragSelection;
     if (!drag) {
       scheduleHoverCursor(pageNum, event.clientX, event.clientY);
@@ -1111,6 +1375,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function finishPointerSelection(pageNum: number, event: PointerEvent) {
+    if (event.pointerType === 'touch') return;
     const drag = activeDragSelection;
     if (!drag || drag.pageNum !== pageNum || drag.pointerId !== event.pointerId) return;
 
@@ -1164,7 +1429,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function handleLinkPointerDown(event: PointerEvent) {
-    event.preventDefault();
+    if (event.pointerType !== 'touch') event.preventDefault();
     event.stopPropagation();
   }
 
@@ -1281,7 +1546,7 @@ export const PDFViewer: Component<Props> = (props) => {
   // Calculate total height
   const totalHeight = createMemo(() => {
     const sizes = pageSizes();
-    let total = VIEWER_PADDING * 2;
+    let total = getReaderTopSpacing() + getReaderBottomSpacing();
     for (let i = 0; i < pdfStore.totalPages(); i++) {
       total += getPageHeight(i, sizes);
     }
@@ -1294,10 +1559,16 @@ export const PDFViewer: Component<Props> = (props) => {
       ref={containerRef}
       class="pdf-viewer"
       onScroll={onScroll}
+      onPointerDown={handleReaderPointerDown}
+      onPointerUp={handleReaderPointerUp}
+      onPointerCancel={clearPendingReaderTap}
       style={{
         flex: 1,
-        overflow: 'auto',
+        'overflow-x': props.mobileLayout ? 'hidden' : 'auto',
+        'overflow-y': 'auto',
         background: '#1a1a1a',
+        'scroll-padding-top': `${getReaderTopSpacing()}px`,
+        'scroll-padding-bottom': `${getReaderBottomSpacing()}px`,
         filter: `brightness(${pdfStore.brightness()})`
       }}
     >
@@ -1308,7 +1579,8 @@ export const PDFViewer: Component<Props> = (props) => {
         "flex-direction": 'column',
         "align-items": 'center',
         "gap": `${PAGE_GAP}px`,
-        "padding": '20px',
+        "padding": `${getReaderTopSpacing()}px ${getHorizontalViewerPadding()}px ${getReaderBottomSpacing()}px`,
+        transform: `translateX(${fitTextShiftPx()}px)`,
         visibility: isInitialRevealHidden() ? 'hidden' : 'visible'
       }}>
         <For each={pageIndices()}>
@@ -1330,7 +1602,7 @@ export const PDFViewer: Component<Props> = (props) => {
                 background: 'white',
                 'box-shadow': '0 2px 10px rgba(0,0,0,0.3)',
                 cursor: hoverCursorPage() === pageNum ? 'text' : 'default',
-                'touch-action': 'none',
+                'touch-action': 'pan-y',
                 'user-select': 'none'
               }}
             >

@@ -4,38 +4,36 @@ import { pdfStore } from '../stores/pdfStore';
 
 interface Props {
   onSelectItem: (pageNum: number, y?: number) => void;
+  variant?: 'desktop' | 'drawer';
+  open?: boolean;
+  onClose?: () => void;
 }
 
 export const Sidebar: Component<Props> = (props) => {
+  const isDrawer = () => props.variant === 'drawer';
+  const isVisible = () => isDrawer() ? props.open === true : pdfStore.sidebarVisible();
+
   return (
-    <Show when={pdfStore.sidebarVisible()}>
-      <div class="sidebar" style={{
-        width: '250px',
-        background: '#252526',
-        'border-right': '1px solid #3d3d3d',
-        overflow: 'auto',
-        'flex-shrink': 0
-      }}>
-        <div style={{ padding: '12px', 'border-bottom': '1px solid #3d3d3d' }}>
-          <h3 style={{ margin: 0, color: '#fff', 'font-size': '14px' }}>Table of Contents</h3>
+    <Show when={isVisible()}>
+      <div class={isDrawer() ? 'sidebar sidebar--drawer' : 'sidebar'}>
+        <div class="sidebar__header">
+          <h3>Table of Contents</h3>
+          <Show when={isDrawer()}>
+            <button onClick={props.onClose}>Close</button>
+          </Show>
         </div>
         
-        <div style={{ padding: '8px' }}>
+        <div class="sidebar__toc-list">
           <For each={pdfStore.toc()}>
             {(item) => (
               <div
                 class="toc-item"
-                onClick={() => props.onSelectItem(item.pageNum, item.y)}
+                onClick={() => {
+                  props.onSelectItem(item.pageNum, item.y);
+                  if (isDrawer()) props.onClose?.();
+                }}
                 style={{
-                  padding: '8px 12px',
                   'padding-left': `${12 + item.level * 16}px`,
-                  color: '#ccc',
-                  cursor: 'pointer',
-                  'font-size': '13px',
-                  'border-radius': '4px',
-                  'white-space': 'nowrap',
-                  overflow: 'hidden',
-                  'text-overflow': 'ellipsis'
                 }}
               >
                 {item.title}
@@ -44,7 +42,7 @@ export const Sidebar: Component<Props> = (props) => {
           </For>
           
           <Show when={pdfStore.toc().length === 0}>
-            <div style={{ color: '#666', padding: '20px', 'text-align': 'center', 'font-size': '13px' }}>
+            <div class="sidebar__empty">
               No table of contents
             </div>
           </Show>

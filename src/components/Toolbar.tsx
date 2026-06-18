@@ -1,19 +1,7 @@
 import { createSignal, type Component } from 'solid-js';
 import { pdfStore } from '../stores/pdfStore';
 import { DEFAULT_FOOTER_MARGIN, DEFAULT_HEADER_MARGIN, readingSession } from '../stores/readingSessionStore';
-
-const TTS_MARGIN_MIN = 0;
-const TTS_MARGIN_MAX = 240;
-const TTS_MARGIN_STEP = 5;
-
-function clampTtsMargin(value: number): number {
-  if (!Number.isFinite(value)) return TTS_MARGIN_MIN;
-  return Math.max(TTS_MARGIN_MIN, Math.min(TTS_MARGIN_MAX, value));
-}
-
-function readTtsMarginInput(value: string): number {
-  return clampTtsMargin(Number(value));
-}
+import { TtsMarginControls } from './TtsMarginControls';
 
 interface Props {
   onOpenFile: () => void;
@@ -88,50 +76,18 @@ export const Toolbar: Component<Props> = (props) => {
               'z-index': 20,
             }}
           >
-            <div style={{ 'font-weight': 600, 'margin-bottom': '8px' }}>TTS exclude margins</div>
-            <div style={{ color: '#c8c8c8', 'font-size': '12px', 'margin-bottom': '12px' }}>
-              Ignore repeated header and footer text when building spoken sentences.
-            </div>
+            <TtsMarginControls
+              headerMargin={readingSession.headerMargin()}
+              footerMargin={readingSession.footerMargin()}
+              onHeaderMarginChange={readingSession.setHeaderMargin}
+              onFooterMarginChange={readingSession.setFooterMargin}
+              onReset={() => {
+                readingSession.setHeaderMargin(DEFAULT_HEADER_MARGIN);
+                readingSession.setFooterMargin(DEFAULT_FOOTER_MARGIN);
+              }}
+            />
 
-            <label style={{ display: 'grid', gap: '6px', 'margin-bottom': '12px' }}>
-              <span style={{ display: 'flex', 'justify-content': 'space-between', 'font-size': '13px' }}>
-                <span>Header</span>
-                <span>{readingSession.headerMargin()}px</span>
-              </span>
-              <input
-                type="range"
-                min={TTS_MARGIN_MIN}
-                max={TTS_MARGIN_MAX}
-                step={TTS_MARGIN_STEP}
-                value={readingSession.headerMargin()}
-                onInput={(event) => readingSession.setHeaderMargin(readTtsMarginInput(event.currentTarget.value))}
-              />
-            </label>
-
-            <label style={{ display: 'grid', gap: '6px', 'margin-bottom': '12px' }}>
-              <span style={{ display: 'flex', 'justify-content': 'space-between', 'font-size': '13px' }}>
-                <span>Footer</span>
-                <span>{readingSession.footerMargin()}px</span>
-              </span>
-              <input
-                type="range"
-                min={TTS_MARGIN_MIN}
-                max={TTS_MARGIN_MAX}
-                step={TTS_MARGIN_STEP}
-                value={readingSession.footerMargin()}
-                onInput={(event) => readingSession.setFooterMargin(readTtsMarginInput(event.currentTarget.value))}
-              />
-            </label>
-
-            <div style={{ display: 'flex', 'justify-content': 'space-between', gap: '8px' }}>
-              <button
-                onClick={() => {
-                  readingSession.setHeaderMargin(DEFAULT_HEADER_MARGIN);
-                  readingSession.setFooterMargin(DEFAULT_FOOTER_MARGIN);
-                }}
-              >
-                Reset
-              </button>
+            <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: '8px', 'margin-top': '10px' }}>
               <button onClick={() => setShowMarginControls(false)}>Close</button>
             </div>
           </div>

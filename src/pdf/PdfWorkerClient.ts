@@ -77,10 +77,10 @@ export class PdfWorkerClient {
     await promise;
   }
 
-  async renderPage(documentId: number, pageNum: number, scale: number): Promise<RenderedPage> {
+  async renderPage(documentId: number, pageNum: number, scale: number, pixelRatio: number): Promise<RenderedPage> {
     await this.ready();
     const { id, promise } = this.createPending<RenderedPage>();
-    const request: PdfWorkerRequest = { id, type: 'renderPage', documentId, pageNum, scale };
+    const request: PdfWorkerRequest = { id, type: 'renderPage', documentId, pageNum, scale, pixelRatio };
     this.worker.postMessage(request);
     return promise;
   }

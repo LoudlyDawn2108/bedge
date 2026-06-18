@@ -47,7 +47,7 @@ async function handleRequest(request: PdfWorkerRequest): Promise<void> {
         break;
       }
       case 'renderPage': {
-        const renderedPage = engine.renderPage(request.documentId, request.pageNum, request.scale);
+        const renderedPage = engine.renderPage(request.documentId, request.pageNum, request.scale, request.pixelRatio);
         postSuccess(request.id, renderedPage, [renderedPage.pixels]);
         break;
       }

@@ -18,7 +18,7 @@ export interface SerializedWorkerError {
 export type PdfWorkerRequest =
   | { id: number; type: 'openDocument'; buffer: ArrayBuffer }
   | { id: number; type: 'closeDocument'; documentId: number }
-  | { id: number; type: 'renderPage'; documentId: number; pageNum: number; scale: number }
+  | { id: number; type: 'renderPage'; documentId: number; pageNum: number; scale: number; pixelRatio: number }
   | { id: number; type: 'getPageText'; documentId: number; pageNum: number }
   | { id: number; type: 'getPageLinks'; documentId: number; pageNum: number }
   | { id: number; type: 'getPageMetrics'; documentId: number; pageNum: number }
