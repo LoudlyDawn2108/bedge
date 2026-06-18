@@ -1,4 +1,4 @@
-import { createSignal, type Component } from 'solid-js';
+import { createSignal, createEffect, type Component } from 'solid-js';
 import { pdfStore } from '../stores/pdfStore';
 import { DEFAULT_FOOTER_MARGIN, DEFAULT_HEADER_MARGIN, readingSession } from '../stores/readingSessionStore';
 import { TtsMarginControls } from './TtsMarginControls';
@@ -13,6 +13,38 @@ interface Props {
 
 export const Toolbar: Component<Props> = (props) => {
   const [showMarginControls, setShowMarginControls] = createSignal(false);
+  const [zoomInputValue, setZoomInputValue] = createSignal(
+    `${Math.round(pdfStore.zoomLevel() * 100)}`
+  );
+  const [isEditingZoom, setIsEditingZoom] = createSignal(false);
+
+  createEffect(() => {
+    if (!isEditingZoom()) {
+      setZoomInputValue(`${Math.round(pdfStore.zoomLevel() * 100)}`);
+    }
+  });
+
+  const commitZoomValue = () => {
+    const parsedValue = parseInt(zoomInputValue().trim(), 10);
+    if (!Number.isNaN(parsedValue)) {
+      pdfStore.setZoomLevel(parsedValue / 100);
+    }
+    setZoomInputValue(`${Math.round(pdfStore.zoomLevel() * 100)}`);
+    setIsEditingZoom(false);
+  };
+
+  const handleZoomInputKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitZoomValue();
+      (event.target as HTMLInputElement).blur();
+    }
+  };
+
+  const handleZoomInputBlur = () => {
+    setZoomInputValue(`${Math.round(pdfStore.zoomLevel() * 100)}`);
+    setIsEditingZoom(false);
+  };
 
   return (
     <div class="toolbar" style={{
@@ -39,9 +71,27 @@ export const Toolbar: Component<Props> = (props) => {
       {/* Center - Page navigation */}
       <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
         <button onClick={pdfStore.zoomOut}>−</button>
-        <span style={{ color: '#fff', 'min-width': '50px', 'text-align': 'center' }}>
-          {Math.round(pdfStore.zoomLevel() * 100)}%
-        </span>
+        <input
+          type="text"
+          value={zoomInputValue()}
+          onInput={(event) => {
+            setZoomInputValue((event.target as HTMLInputElement).value);
+            setIsEditingZoom(true);
+          }}
+          onKeyDown={handleZoomInputKeyDown}
+          onBlur={handleZoomInputBlur}
+          style={{
+            width: '56px',
+            padding: '4px 6px',
+            'text-align': 'center',
+            'border-radius': '4px',
+            border: '1px solid #555',
+            color: '#fff',
+            background: '#1f1f21'
+          }}
+          aria-label="Zoom percentage"
+        />
+        <span style={{ color: '#fff' }}>%</span>
         <button onClick={pdfStore.zoomIn}>+</button>
         
         <span style={{ color: '#fff', margin: '0 16px' }}>
