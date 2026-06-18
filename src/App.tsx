@@ -75,8 +75,7 @@ interface ReopenStoredBookOptions {
 }
 
 const MOBILE_CHROME_HIDE_DELAY_MS = 2400;
-const MOBILE_CHROME_TOP_INSET_PX = 66;
-const MOBILE_CHROME_BOTTOM_INSET_PX = 86;
+const MOBILE_TTS_DOCK_INSET_PX = 68;
 
 const App: Component = () => {
   const [showLibrary, setShowLibrary] = createSignal(false);
@@ -105,12 +104,10 @@ const App: Component = () => {
 
   const hasMobileDocument = () => isMobileShell() && pdfStore.totalPages() > 0;
 
-  const mobileReaderTopInset = () => hasMobileDocument() && mobileChromeVisible()
-    ? MOBILE_CHROME_TOP_INSET_PX
-    : 0;
+  const mobileReaderTopInset = () => 0;
 
-  const mobileReaderBottomInset = () => hasMobileDocument() && mobileChromeVisible()
-    ? MOBILE_CHROME_BOTTOM_INSET_PX
+  const mobileReaderBottomInset = () => hasMobileDocument()
+    ? MOBILE_TTS_DOCK_INSET_PX
     : 0;
 
   const isMobileChromeCollapsed = () => canAutoHideMobileChrome() && !mobileChromeVisible();

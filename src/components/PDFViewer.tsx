@@ -111,7 +111,7 @@ export const PDFViewer: Component<Props> = (props) => {
 
   const PAGE_GAP = 20;
   const VIEWER_PADDING = 20;
-  const PAGES_PER_BATCH = 5;
+  const PAGES_PER_BATCH = 2;
   const INITIAL_REVEAL_FAIL_OPEN_MS = 5000;
   const FIT_ZOOM_DELTA = 0.01;
   const MOBILE_TEXT_FIT_EDGE_MARGIN = 5;

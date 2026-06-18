@@ -1,4 +1,14 @@
 import { Show, type Component } from 'solid-js';
+import {
+  FolderOpen,
+  Library,
+  ListTree,
+  Settings2,
+  SkipBack,
+  SkipForward,
+  Play,
+  Pause,
+} from 'lucide-solid';
 import { TtsMarginControls } from './TtsMarginControls';
 
 interface Props {
@@ -33,7 +43,7 @@ interface Props {
 }
 
 export const MobileReaderChrome: Component<Props> = (props) => {
-  const chromeControlsDisabled = () => !props.chromeVisible;
+  const topbarControlsDisabled = () => !props.chromeVisible;
 
   function openSettings(): void {
     props.onActivity();
@@ -44,30 +54,99 @@ export const MobileReaderChrome: Component<Props> = (props) => {
     props.onSettingsOpenChange(false);
   }
 
-  const pageLabel = () => props.totalPages > 0
-    ? `${props.currentPage + 1} / ${props.totalPages}`
-    : 'No PDF';
+  const pageLabel = () =>
+    props.totalPages > 0 ? `${props.currentPage + 1} / ${props.totalPages}` : 'No PDF';
 
   return (
     <>
-      <div class="mobile-reader-topbar" aria-label="Mobile reader navigation" onPointerDown={props.onActivity}>
-        <button class="mobile-icon-button" onClick={props.onOpenLibrary} aria-label="Open library" disabled={chromeControlsDisabled()}>Library</button>
+      <div
+        class="mobile-reader-topbar"
+        aria-label="Mobile reader navigation"
+        onPointerDown={props.onActivity}
+      >
+        <button
+          class="mobile-icon-button"
+          onClick={props.onToggleToc}
+          aria-label="Table of contents"
+          title="Table of contents"
+          disabled={topbarControlsDisabled() || !props.hasDocument}
+        >
+          <ListTree size={20} />
+        </button>
+
+        <button
+          class="mobile-icon-button"
+          onClick={props.onOpenLibrary}
+          aria-label="Open library"
+          title="Open library"
+          disabled={topbarControlsDisabled()}
+        >
+          <Library size={20} />
+        </button>
+
         <div class="mobile-reader-topbar__title">
           <span>{props.title}</span>
           <small>{pageLabel()}</small>
         </div>
-        <button class="mobile-icon-button" onClick={props.onOpenFile} disabled={chromeControlsDisabled()}>Open</button>
-        <button class="mobile-icon-button" onClick={props.onToggleToc} disabled={chromeControlsDisabled() || !props.hasDocument}>TOC</button>
+
+        <button
+          class="mobile-icon-button"
+          onClick={props.onOpenFile}
+          aria-label="Open PDF"
+          title="Open PDF"
+          disabled={topbarControlsDisabled()}
+        >
+          <FolderOpen size={20} />
+        </button>
+
+        <button
+          class="mobile-icon-button"
+          onClick={openSettings}
+          aria-label="Settings"
+          title="Settings"
+          disabled={topbarControlsDisabled()}
+        >
+          <Settings2 size={20} />
+        </button>
       </div>
 
       <Show when={props.hasDocument}>
-        <div class="mobile-reader-dock" aria-label="Mobile reader playback controls" onPointerDown={props.onActivity}>
-          <button class="mobile-dock-button" onClick={props.onPrevSentence} disabled={chromeControlsDisabled()}>Prev</button>
-          <button class="mobile-dock-button mobile-dock-button--primary" onClick={props.onPlayPause} disabled={chromeControlsDisabled()}>
-            {props.isPlaying ? 'Pause' : 'Play'}
+        <div
+          class="mobile-reader-dock"
+          aria-label="Mobile reader playback controls"
+          onPointerDown={props.onActivity}
+        >
+          <button
+            class="mobile-dock-button"
+            onClick={props.onPrevSentence}
+            aria-label="Previous sentence"
+            title="Previous sentence"
+          >
+            <SkipBack size={22} />
           </button>
-          <button class="mobile-dock-button" onClick={props.onNextSentence} disabled={chromeControlsDisabled()}>Next</button>
-          <button class="mobile-dock-button" onClick={openSettings} disabled={chromeControlsDisabled()}>Settings</button>
+
+          <button
+            class="mobile-dock-button mobile-dock-button--primary"
+            onClick={props.onPlayPause}
+            aria-label={props.isPlaying ? 'Pause' : 'Play'}
+            title={props.isPlaying ? 'Pause' : 'Play'}
+          >
+            <Show
+              when={props.isPlaying}
+              fallback={<Play size={24} fill="currentColor" />}
+            >
+              <Pause size={24} fill="currentColor" />
+            </Show>
+          </button>
+
+          <button
+            class="mobile-dock-button"
+            onClick={props.onNextSentence}
+            aria-label="Next sentence"
+            title="Next sentence"
+          >
+            <SkipForward size={22} />
+          </button>
         </div>
       </Show>
 
