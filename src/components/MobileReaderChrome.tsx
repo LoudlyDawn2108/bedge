@@ -9,7 +9,7 @@ import {
   Play,
   Pause,
 } from 'lucide-solid';
-import { TtsMarginControls } from './TtsMarginControls';
+import { TtsControls } from './TtsControls';
 
 interface Props {
   title: string;
@@ -188,14 +188,17 @@ export const MobileReaderChrome: Component<Props> = (props) => {
               </button>
             </div>
 
-            <TtsMarginControls
-              compact
-              headerMargin={props.headerMargin}
-              footerMargin={props.footerMargin}
-              onHeaderMarginChange={props.onHeaderMarginChange}
-              onFooterMarginChange={props.onFooterMarginChange}
-              onReset={props.onResetTtsMargins}
-            />
+            <div class="mobile-settings-group">
+              <div class="mobile-settings-group__label">Speech & Audio</div>
+              <TtsControls
+                compact
+                headerMargin={props.headerMargin}
+                footerMargin={props.footerMargin}
+                onHeaderMarginChange={props.onHeaderMarginChange}
+                onFooterMarginChange={props.onFooterMarginChange}
+                onResetMargins={props.onResetTtsMargins}
+              />
+            </div>
           </section>
         </div>
       </Show>

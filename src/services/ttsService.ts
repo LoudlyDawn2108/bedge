@@ -22,7 +22,9 @@ export interface TTSRequest {
 }
 
 // Default voice - high quality neural voice
-const DEFAULT_VOICE = 'en-US-AndrewMultilingualNeural';
+export const DEFAULT_VOICE = 'en-US-AndrewMultilingualNeural';
+export const DEFAULT_RATE = 1.0;
+export const DEFAULT_VOLUME = 1.0;
 const MAX_CACHE_ENTRIES = 8;
 const MAX_CACHE_BYTES = 12 * 1024 * 1024;
 
@@ -43,6 +45,8 @@ interface EdgeVoiceRecord {
 
 class TTSService {
   private currentVoice: string = DEFAULT_VOICE;
+  private currentRate: number = DEFAULT_RATE;
+  private currentVolume: number = DEFAULT_VOLUME;
   private currentAudio: HTMLAudioElement | null = null;
   private currentAudioCleanup: (() => void) | null = null;
   private currentPlaybackResolve: (() => void) | null = null;
@@ -112,6 +116,33 @@ class TTSService {
   
   getVoice(): string {
     return this.currentVoice;
+  }
+
+  setRate(rate: number): void {
+    const clamped = Math.max(0.5, Math.min(2.0, Math.round(rate * 100) / 100));
+    if (clamped === this.currentRate) return;
+
+    this.stop();
+    this.currentRate = clamped;
+    this.contextVersion += 1;
+    this.clearReadyCache();
+    this.inFlight.clear();
+  }
+
+  getRate(): number {
+    return this.currentRate;
+  }
+
+  setVolume(volume: number): void {
+    const clamped = Math.max(0, Math.min(1, Math.round(volume * 100) / 100));
+    this.currentVolume = clamped;
+    if (this.currentAudio) {
+      this.currentAudio.volume = clamped;
+    }
+  }
+
+  getVolume(): number {
+    return this.currentVolume;
   }
   
   async prepare(request: TTSRequest): Promise<void> {
@@ -208,6 +239,7 @@ class TTSService {
       this.currentContext?.documentKey ?? '__global__',
       this.currentContext?.layoutKey ?? '__default__',
       this.currentVoice,
+      this.currentRate,
       request.pageNum,
       request.sentenceIndex,
       request.text,
@@ -226,7 +258,8 @@ class TTSService {
     if (existing) return existing;
 
     const voice = this.currentVoice;
-    const task = this.synthesizeRequest(request, cacheKey, voice, contextVersion)
+    const rate = this.currentRate;
+    const task = this.synthesizeRequest(request, cacheKey, voice, rate, contextVersion)
       .finally(() => {
         if (this.inFlight.get(cacheKey) === task) {
           this.inFlight.delete(cacheKey);
@@ -241,14 +274,17 @@ class TTSService {
     request: TTSRequest,
     cacheKey: string,
     voice: string,
+    rate: number,
     contextVersion: number,
   ): Promise<CachedAudioEntry | null> {
     if (!request.text.trim()) return null;
 
     const tts = new EdgeTTS();
     const chunks: Uint8Array[] = [];
+    const ratePercentage = Math.round((rate - 1.0) * 100);
+    const rateString = `${ratePercentage >= 0 ? '+' : ''}${ratePercentage}%`;
 
-    for await (const chunk of tts.synthesizeStream(request.text, voice)) {
+    for await (const chunk of tts.synthesizeStream(request.text, voice, { rate: rateString })) {
       if (contextVersion !== this.contextVersion) {
         return null;
       }
@@ -296,6 +332,7 @@ class TTSService {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio(entry.url);
+      audio.volume = this.currentVolume;
       let settled = false;
 
       const cleanup = () => {

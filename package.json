@@ -11,7 +11,6 @@
   "dependencies": {
     "@andresaya/edge-tts": "^1.8.0",
     "dexie": "^4.2.1",
-    "edge-tts-universal": "^1.3.3",
     "lucide-solid": "^1.21.0",
     "mupdf": "^1.26.4",
     "solid-js": "^1.9.10"

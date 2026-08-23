@@ -9,6 +9,7 @@ import { documentSession } from './services/documentSession';
 import { pdfHistory } from './services/pdfHistory';
 import { ttsService } from './services/ttsService';
 import { pdfStore } from './stores/pdfStore';
+import { ttsStore } from './stores/ttsStore';
 import { DEFAULT_COLUMN_MODE, DEFAULT_FOOTER_MARGIN, DEFAULT_HEADER_MARGIN, readingSession } from './stores/readingSessionStore';
 import { playbackController } from './controllers/playbackController';
 import { addBook, deleteBook, getBookByPath, updateBook, updateBookTextFitProfile, getAllBooks, getMostRecentlyOpenedBook, removeLegacyPdfBlobs, type Book, type StoredPDFFileHandle } from './services/db';
@@ -587,6 +588,7 @@ const App: Component = () => {
       console.error('Failed to remove legacy PDF blobs:', error);
     });
 
+    void ttsStore.init();
     void autoReopenLastBook();
 
     onCleanup(() => {

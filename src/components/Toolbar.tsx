@@ -1,7 +1,8 @@
-import { createSignal, createEffect, type Component } from 'solid-js';
+import { createSignal, createEffect, onCleanup, type Component } from 'solid-js';
+import { Volume2 } from 'lucide-solid';
 import { pdfStore } from '../stores/pdfStore';
 import { DEFAULT_FOOTER_MARGIN, DEFAULT_HEADER_MARGIN, readingSession } from '../stores/readingSessionStore';
-import { TtsMarginControls } from './TtsMarginControls';
+import { TtsControls } from './TtsControls';
 
 interface Props {
   onOpenFile: () => void;
@@ -12,11 +13,43 @@ interface Props {
 }
 
 export const Toolbar: Component<Props> = (props) => {
-  const [showMarginControls, setShowMarginControls] = createSignal(false);
+  const [showTtsControls, setShowTtsControls] = createSignal(false);
   const [zoomInputValue, setZoomInputValue] = createSignal(
     `${Math.round(pdfStore.zoomLevel() * 100)}`
   );
   const [isEditingZoom, setIsEditingZoom] = createSignal(false);
+  let ttsContainerRef: HTMLDivElement | undefined;
+
+  createEffect(() => {
+    if (!showTtsControls()) return;
+
+    const handleOutsideClick = (event: Event) => {
+      const target = event.target as Node | null;
+      const path = event.composedPath ? event.composedPath() : [];
+      if (ttsContainerRef && target && !ttsContainerRef.contains(target) && !path.includes(ttsContainerRef)) {
+        setShowTtsControls(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowTtsControls(false);
+      }
+    };
+
+    // Capture phase ensures outside clicks are caught reliably across all child elements/overlays
+    document.addEventListener('pointerdown', handleOutsideClick, true);
+    document.addEventListener('mousedown', handleOutsideClick, true);
+    document.addEventListener('touchstart', handleOutsideClick, true);
+    document.addEventListener('keydown', handleKeyDown);
+
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', handleOutsideClick, true);
+      document.removeEventListener('mousedown', handleOutsideClick, true);
+      document.removeEventListener('touchstart', handleOutsideClick, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    });
+  });
 
   createEffect(() => {
     if (!isEditingZoom()) {
@@ -103,43 +136,43 @@ export const Toolbar: Component<Props> = (props) => {
       <div style={{ flex: 1 }} />
       
       {/* Right side - TTS controls */}
-      <div style={{ position: 'relative' }}>
-        <button onClick={() => setShowMarginControls((show) => !show)}>
-          TTS margins
+      <div ref={ttsContainerRef} style={{ position: 'relative' }}>
+        <button
+          onClick={() => setShowTtsControls((show) => !show)}
+          style={{
+            display: 'inline-flex',
+            'align-items': 'center',
+            gap: '6px',
+            background: showTtsControls() ? '#454545' : undefined,
+          }}
+          aria-expanded={showTtsControls()}
+          aria-haspopup="dialog"
+          title="TTS voice, speed, and volume controls"
+        >
+          <Volume2 size={16} />
+          <span>TTS Controls</span>
         </button>
 
-        {showMarginControls() && (
+        {showTtsControls() && (
           <div
             role="dialog"
-            aria-label="TTS exclude margins"
-            style={{
-              position: 'absolute',
-              right: '0',
-              top: 'calc(100% + 8px)',
-              width: '280px',
-              padding: '12px',
-              background: '#252526',
-              border: '1px solid #4a4a4a',
-              'border-radius': '6px',
-              'box-shadow': '0 10px 24px rgba(0, 0, 0, 0.35)',
-              color: '#fff',
-              'z-index': 20,
-            }}
+            aria-label="TTS Controls"
+            class="desktop-tts-popover"
           >
-            <TtsMarginControls
+            <div class="desktop-tts-popover__header">
+              <h3>Speech & Audio Settings</h3>
+            </div>
+
+            <TtsControls
               headerMargin={readingSession.headerMargin()}
               footerMargin={readingSession.footerMargin()}
               onHeaderMarginChange={readingSession.setHeaderMargin}
               onFooterMarginChange={readingSession.setFooterMargin}
-              onReset={() => {
+              onResetMargins={() => {
                 readingSession.setHeaderMargin(DEFAULT_HEADER_MARGIN);
                 readingSession.setFooterMargin(DEFAULT_FOOTER_MARGIN);
               }}
             />
-
-            <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: '8px', 'margin-top': '10px' }}>
-              <button onClick={() => setShowMarginControls(false)}>Close</button>
-            </div>
           </div>
         )}
       </div>
@@ -160,3 +193,4 @@ export const Toolbar: Component<Props> = (props) => {
 };
 
 export default Toolbar;
+
