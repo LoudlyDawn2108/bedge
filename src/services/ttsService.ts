@@ -1,6 +1,3 @@
-// Edge TTS Service using @andresaya/edge-tts
-// High-quality Microsoft neural voices via Edge TTS
-
 import { EdgeTTS } from '@andresaya/edge-tts';
 
 export interface Voice {
@@ -27,6 +24,42 @@ export const DEFAULT_RATE = 1.0;
 export const DEFAULT_VOLUME = 1.0;
 const MAX_CACHE_ENTRIES = 8;
 const MAX_CACHE_BYTES = 12 * 1024 * 1024;
+
+const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const VOICES_URL = 'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list';
+const VERSION_MS_GEC = '1-143.0.3650';
+
+async function generateSecMsGec(trustedClientToken: string): Promise<string> {
+  const now = new Date().toUTCString();
+  const fixedDate = new Date(now);
+  const ticks = Math.floor(fixedDate.getTime() / 1000) + 11644473600;
+  const rounded = ticks - (ticks % 300);
+  const windowsTicks = BigInt(rounded) * 10000000n;
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(`${windowsTicks}${trustedClientToken}`);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+}
+
+function formatVoiceName(shortName: string, friendlyName?: string): string {
+  const parts = shortName.split('-');
+  const rawName = parts.length >= 3 ? parts.slice(2).join('-') : (friendlyName || shortName);
+  if (rawName.endsWith('MultilingualNeural')) {
+    return rawName.replace(/MultilingualNeural$/, ' (Multilingual)');
+  }
+  if (rawName.endsWith('NeuralHD')) {
+    return rawName.replace(/NeuralHD$/, ' (HD)');
+  }
+  if (rawName.endsWith('Neural')) {
+    return rawName.replace(/Neural$/, '');
+  }
+  return rawName;
+}
 
 interface CachedAudioEntry {
   url: string;
@@ -66,11 +99,21 @@ class TTSService {
     if (this.voicesCache) return this.voicesCache;
     
     try {
-      // EdgeTTS.getVoices() returns list of available voices
-      const tts = new EdgeTTS();
-      const voices = await tts.getVoices() as EdgeVoiceRecord[];
-      this.voicesCache = voices.map(v => ({
-        name: v.FriendlyName || v.Name,
+      const secMsGec = await generateSecMsGec(TRUSTED_CLIENT_TOKEN);
+      const url = `${VOICES_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${VERSION_MS_GEC}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch voices list: HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      const rawVoices: EdgeVoiceRecord[] = Array.isArray(data) ? data : (data.voices || data.Voices || []);
+      
+      if (!rawVoices || rawVoices.length === 0) {
+        return [];
+      }
+
+      this.voicesCache = rawVoices.map(v => ({
+        name: formatVoiceName(v.ShortName, v.FriendlyName),
         shortName: v.ShortName,
         lang: v.Locale,
         gender: v.Gender
