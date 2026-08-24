@@ -103,6 +103,7 @@ export const VoiceCombobox: Component<Props> = (props) => {
   const [isOpen, setIsOpen] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal('');
   const [selectedCategory, setSelectedCategory] = createSignal<string>('all');
+  const [selectedGender, setSelectedGender] = createSignal<'all' | 'Female' | 'Male'>('all');
   const [highlightedIndex, setHighlightedIndex] = createSignal(0);
 
   let containerRef: HTMLDivElement | undefined;
@@ -130,6 +131,7 @@ export const VoiceCombobox: Component<Props> = (props) => {
   const filteredVoices = createMemo(() => {
     const query = searchQuery().trim().toLowerCase();
     const category = selectedCategory();
+    const gender = selectedGender();
     const tokens = query ? query.split(/\s+/).filter(Boolean) : [];
     const allVoices = ttsStore.voices();
 
@@ -137,6 +139,9 @@ export const VoiceCombobox: Component<Props> = (props) => {
 
     for (const voice of allVoices) {
       if (category !== 'all' && !voice.lang.startsWith(category)) {
+        continue;
+      }
+      if (gender !== 'all' && voice.gender !== gender) {
         continue;
       }
 
@@ -281,26 +286,75 @@ export const VoiceCombobox: Component<Props> = (props) => {
             </Show>
           </div>
 
-          {/* Quick language filter tabs */}
-          <div class="voice-combobox__category-chips">
-            <button
-              type="button"
-              class={`voice-chip ${selectedCategory() === 'all' ? 'voice-chip--active' : ''}`}
-              onClick={() => setSelectedCategory('all')}
-            >
-              All
-            </button>
-            <For each={popularLanguages()}>
-              {(langCode) => (
+          {/* Quick filter tabs */}
+          <div class="voice-combobox__filter-section">
+            {/* Gender filter */}
+            <div class="voice-combobox__filter-row">
+              <span class="voice-combobox__filter-label">Gender:</span>
+              <div class="voice-combobox__chips-scroll">
                 <button
                   type="button"
-                  class={`voice-chip ${selectedCategory() === langCode ? 'voice-chip--active' : ''}`}
-                  onClick={() => setSelectedCategory(langCode)}
+                  class={`voice-chip ${selectedGender() === 'all' ? 'voice-chip--active' : ''}`}
+                  onClick={() => {
+                    setSelectedGender('all');
+                    setHighlightedIndex(0);
+                  }}
                 >
-                  {getLanguageDisplayName(langCode)}
+                  All
                 </button>
-              )}
-            </For>
+                <button
+                  type="button"
+                  class={`voice-chip ${selectedGender() === 'Female' ? 'voice-chip--active voice-chip--female' : ''}`}
+                  onClick={() => {
+                    setSelectedGender('Female');
+                    setHighlightedIndex(0);
+                  }}
+                >
+                  Female
+                </button>
+                <button
+                  type="button"
+                  class={`voice-chip ${selectedGender() === 'Male' ? 'voice-chip--active voice-chip--male' : ''}`}
+                  onClick={() => {
+                    setSelectedGender('Male');
+                    setHighlightedIndex(0);
+                  }}
+                >
+                  Male
+                </button>
+              </div>
+            </div>
+
+            {/* Language filter */}
+            <div class="voice-combobox__filter-row">
+              <span class="voice-combobox__filter-label">Language:</span>
+              <div class="voice-combobox__chips-scroll">
+                <button
+                  type="button"
+                  class={`voice-chip ${selectedCategory() === 'all' ? 'voice-chip--active' : ''}`}
+                  onClick={() => {
+                    setSelectedCategory('all');
+                    setHighlightedIndex(0);
+                  }}
+                >
+                  All
+                </button>
+                <For each={popularLanguages()}>
+                  {(langCode) => (
+                    <button
+                      type="button"
+                      class={`voice-chip ${selectedCategory() === langCode ? 'voice-chip--active' : ''}`}
+                      onClick={() => {
+                        setSelectedCategory(langCode);
+                        setHighlightedIndex(0);
+                      }}
+                    >
+                      {getLanguageDisplayName(langCode)}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
           </div>
 
           {/* Voices list */}

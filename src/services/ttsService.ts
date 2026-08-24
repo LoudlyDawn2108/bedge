@@ -112,12 +112,14 @@ class TTSService {
         return [];
       }
 
-      this.voicesCache = rawVoices.map(v => ({
-        name: formatVoiceName(v.ShortName, v.FriendlyName),
-        shortName: v.ShortName,
-        lang: v.Locale,
-        gender: v.Gender
-      }));
+      this.voicesCache = rawVoices
+        .map(v => ({
+          name: formatVoiceName(v.ShortName, v.FriendlyName),
+          shortName: v.ShortName,
+          lang: v.Locale,
+          gender: v.Gender
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.lang.localeCompare(b.lang));
       return this.voicesCache;
     } catch (e) {
       console.error('Failed to fetch voices:', e);

@@ -15,30 +15,30 @@ const SETTING_KEY_VOLUME = 'tts_volume';
 
 // High-quality curated default voice list (covers popular languages immediately before async fetch)
 export const FALLBACK_VOICES: Voice[] = [
+  { name: 'Alvaro (Spanish)', shortName: 'es-ES-AlvaroNeural', lang: 'es-ES', gender: 'Male' },
   { name: 'Andrew (Multilingual)', shortName: 'en-US-AndrewMultilingualNeural', lang: 'en-US', gender: 'Male' },
+  { name: 'Aria', shortName: 'en-US-AriaNeural', lang: 'en-US', gender: 'Female' },
   { name: 'Ava (Multilingual)', shortName: 'en-US-AvaMultilingualNeural', lang: 'en-US', gender: 'Female' },
   { name: 'Brian (Multilingual)', shortName: 'en-US-BrianMultilingualNeural', lang: 'en-US', gender: 'Male' },
-  { name: 'Emma (Multilingual)', shortName: 'en-US-EmmaMultilingualNeural', lang: 'en-US', gender: 'Female' },
-  { name: 'Aria', shortName: 'en-US-AriaNeural', lang: 'en-US', gender: 'Female' },
-  { name: 'Guy', shortName: 'en-US-GuyNeural', lang: 'en-US', gender: 'Male' },
-  { name: 'Jenny', shortName: 'en-US-JennyNeural', lang: 'en-US', gender: 'Female' },
   { name: 'Christopher', shortName: 'en-US-ChristopherNeural', lang: 'en-US', gender: 'Male' },
-  { name: 'Sonia (UK)', shortName: 'en-GB-SoniaNeural', lang: 'en-GB', gender: 'Female' },
-  { name: 'Ryan (UK)', shortName: 'en-GB-RyanNeural', lang: 'en-GB', gender: 'Male' },
-  { name: 'Natasha (Australia)', shortName: 'en-AU-NatashaNeural', lang: 'en-AU', gender: 'Female' },
-  { name: 'William (Australia)', shortName: 'en-AU-WilliamNeural', lang: 'en-AU', gender: 'Male' },
-  { name: 'Florian (German Multilingual)', shortName: 'de-DE-FlorianMultilingualNeural', lang: 'de-DE', gender: 'Male' },
-  { name: 'Seraphina (German Multilingual)', shortName: 'de-DE-SeraphinaMultilingualNeural', lang: 'de-DE', gender: 'Female' },
-  { name: 'Vivienne (French Multilingual)', shortName: 'fr-FR-VivienneMultilingualNeural', lang: 'fr-FR', gender: 'Female' },
-  { name: 'Remy (French Multilingual)', shortName: 'fr-FR-RemyMultilingualNeural', lang: 'fr-FR', gender: 'Male' },
-  { name: 'Alvaro (Spanish)', shortName: 'es-ES-AlvaroNeural', lang: 'es-ES', gender: 'Male' },
   { name: 'Elvira (Spanish)', shortName: 'es-ES-ElviraNeural', lang: 'es-ES', gender: 'Female' },
-  { name: 'Nanami (Japanese)', shortName: 'ja-JP-NanamiNeural', lang: 'ja-JP', gender: 'Female' },
+  { name: 'Emma (Multilingual)', shortName: 'en-US-EmmaMultilingualNeural', lang: 'en-US', gender: 'Female' },
+  { name: 'Florian (German Multilingual)', shortName: 'de-DE-FlorianMultilingualNeural', lang: 'de-DE', gender: 'Male' },
+  { name: 'Guy', shortName: 'en-US-GuyNeural', lang: 'en-US', gender: 'Male' },
+  { name: 'HoaiMy (Vietnamese)', shortName: 'vi-VN-HoaiMyNeural', lang: 'vi-VN', gender: 'Female' },
+  { name: 'Jenny', shortName: 'en-US-JennyNeural', lang: 'en-US', gender: 'Female' },
   { name: 'Keita (Japanese)', shortName: 'ja-JP-KeitaNeural', lang: 'ja-JP', gender: 'Male' },
+  { name: 'NamMinh (Vietnamese)', shortName: 'vi-VN-NamMinhNeural', lang: 'vi-VN', gender: 'Male' },
+  { name: 'Nanami (Japanese)', shortName: 'ja-JP-NanamiNeural', lang: 'ja-JP', gender: 'Female' },
+  { name: 'Natasha (Australia)', shortName: 'en-AU-NatashaNeural', lang: 'en-AU', gender: 'Female' },
+  { name: 'Remy (French Multilingual)', shortName: 'fr-FR-RemyMultilingualNeural', lang: 'fr-FR', gender: 'Male' },
+  { name: 'Ryan (UK)', shortName: 'en-GB-RyanNeural', lang: 'en-GB', gender: 'Male' },
+  { name: 'Seraphina (German Multilingual)', shortName: 'de-DE-SeraphinaMultilingualNeural', lang: 'de-DE', gender: 'Female' },
+  { name: 'Sonia (UK)', shortName: 'en-GB-SoniaNeural', lang: 'en-GB', gender: 'Female' },
+  { name: 'Vivienne (French Multilingual)', shortName: 'fr-FR-VivienneMultilingualNeural', lang: 'fr-FR', gender: 'Female' },
+  { name: 'William (Australia)', shortName: 'en-AU-WilliamNeural', lang: 'en-AU', gender: 'Male' },
   { name: 'Xiaoxiao (Chinese)', shortName: 'zh-CN-XiaoxiaoNeural', lang: 'zh-CN', gender: 'Female' },
   { name: 'Yunxi (Chinese)', shortName: 'zh-CN-YunxiNeural', lang: 'zh-CN', gender: 'Male' },
-  { name: 'HoaiMy (Vietnamese)', shortName: 'vi-VN-HoaiMyNeural', lang: 'vi-VN', gender: 'Female' },
-  { name: 'NamMinh (Vietnamese)', shortName: 'vi-VN-NamMinhNeural', lang: 'vi-VN', gender: 'Male' },
 ];
 
 export const SPEED_PRESETS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
@@ -150,16 +150,8 @@ function createTtsStore() {
     try {
       const fetchedVoices = await ttsService.getVoices();
       if (fetchedVoices && fetchedVoices.length > 0) {
-        // Sort voices by locale and name
-        const sorted = [...fetchedVoices].sort((a, b) => {
-          if (a.lang === b.lang) return a.name.localeCompare(b.name);
-          // Prioritize English and Multilingual voices
-          const aIsEn = a.lang.startsWith('en');
-          const bIsEn = b.lang.startsWith('en');
-          if (aIsEn && !bIsEn) return -1;
-          if (!aIsEn && bIsEn) return 1;
-          return a.lang.localeCompare(b.lang);
-        });
+        // Sort voices alphabetically by name
+        const sorted = [...fetchedVoices].sort((a, b) => a.name.localeCompare(b.name) || a.lang.localeCompare(b.lang));
         setVoices(sorted);
       }
     } catch (error) {

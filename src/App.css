@@ -577,17 +577,40 @@ button:active {
   color: #fff;
 }
 
-.voice-combobox__category-chips {
+.voice-combobox__filter-section {
   display: flex;
-  gap: 4px;
-  padding: 6px 10px;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 10px 8px;
   background: #181716;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.voice-combobox__category-chips::-webkit-scrollbar {
+.voice-combobox__filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-combobox__filter-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #777;
+  flex-shrink: 0;
+  width: 50px;
+}
+
+.voice-combobox__chips-scroll {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  align-items: center;
+}
+
+.voice-combobox__chips-scroll::-webkit-scrollbar {
   display: none;
 }
 
@@ -601,6 +624,7 @@ button:active {
   color: #bbb;
   white-space: nowrap;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .voice-chip:hover {
@@ -612,6 +636,18 @@ button:active {
   background: rgba(217, 143, 98, 0.2) !important;
   border-color: var(--app-accent) !important;
   color: var(--app-accent-strong) !important;
+}
+
+.voice-chip--female.voice-chip--active {
+  background: rgba(235, 110, 165, 0.2) !important;
+  border-color: rgba(235, 110, 165, 0.5) !important;
+  color: #fca5d0 !important;
+}
+
+.voice-chip--male.voice-chip--active {
+  background: rgba(74, 144, 226, 0.2) !important;
+  border-color: rgba(74, 144, 226, 0.5) !important;
+  color: #82b9f9 !important;
 }
 
 .voice-combobox__list {
