@@ -195,7 +195,15 @@ export const PDFViewer: Component<Props> = (props) => {
       && y <= rect.height * READER_TAP_MIDDLE_END_RATIO;
   }
 
+  function unfocusActiveControl(): void {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && activeElement !== document.body) {
+      activeElement.blur();
+    }
+  }
+
   function handleReaderPointerDown(event: PointerEvent): void {
+    unfocusActiveControl();
     if (event.pointerType !== 'touch') return;
     if (!containerRef) return;
 
@@ -932,6 +940,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function onScroll() {
+    unfocusActiveControl();
     handleUserScroll();
     scheduleViewportSync();
   }
@@ -1325,6 +1334,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function handlePointerDown(pageNum: number, event: PointerEvent) {
+    unfocusActiveControl();
     if (event.pointerType === 'touch') return;
     if (event.button !== 0) return;
 
@@ -1429,6 +1439,7 @@ export const PDFViewer: Component<Props> = (props) => {
   }
 
   function handleLinkPointerDown(event: PointerEvent) {
+    unfocusActiveControl();
     if (event.pointerType !== 'touch') event.preventDefault();
     event.stopPropagation();
   }
@@ -1559,6 +1570,7 @@ export const PDFViewer: Component<Props> = (props) => {
       ref={containerRef}
       class="pdf-viewer"
       onScroll={onScroll}
+      onWheel={unfocusActiveControl}
       onPointerDown={handleReaderPointerDown}
       onPointerUp={handleReaderPointerUp}
       onPointerCancel={clearPendingReaderTap}

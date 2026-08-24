@@ -18,6 +18,10 @@ export const Toolbar: Component<Props> = (props) => {
     `${Math.round(pdfStore.zoomLevel() * 100)}`
   );
   const [isEditingZoom, setIsEditingZoom] = createSignal(false);
+  const [pageInputValue, setPageInputValue] = createSignal(
+    pdfStore.totalPages() > 0 ? `${pdfStore.currentPage() + 1}` : ''
+  );
+  const [isEditingPage, setIsEditingPage] = createSignal(false);
   let ttsContainerRef: HTMLDivElement | undefined;
 
   createEffect(() => {
@@ -57,6 +61,12 @@ export const Toolbar: Component<Props> = (props) => {
     }
   });
 
+  createEffect(() => {
+    if (!isEditingPage()) {
+      setPageInputValue(pdfStore.totalPages() > 0 ? `${pdfStore.currentPage() + 1}` : '');
+    }
+  });
+
   const commitZoomValue = () => {
     const parsedValue = parseInt(zoomInputValue().trim(), 10);
     if (!Number.isNaN(parsedValue)) {
@@ -77,6 +87,40 @@ export const Toolbar: Component<Props> = (props) => {
   const handleZoomInputBlur = () => {
     setZoomInputValue(`${Math.round(pdfStore.zoomLevel() * 100)}`);
     setIsEditingZoom(false);
+  };
+
+  const commitPageValue = () => {
+    if (pdfStore.totalPages() <= 0) {
+      setPageInputValue('');
+      setIsEditingPage(false);
+      return;
+    }
+
+    const parsedValue = parseInt(pageInputValue().trim(), 10);
+    if (!Number.isNaN(parsedValue)) {
+      const clampedPage = Math.max(1, Math.min(parsedValue, pdfStore.totalPages()));
+      pdfStore.goToPage(clampedPage - 1);
+    }
+    setPageInputValue(`${pdfStore.currentPage() + 1}`);
+    setIsEditingPage(false);
+  };
+
+  const handlePageInputKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitPageValue();
+      (event.target as HTMLInputElement).blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setPageInputValue(pdfStore.totalPages() > 0 ? `${pdfStore.currentPage() + 1}` : '');
+      setIsEditingPage(false);
+      (event.target as HTMLInputElement).blur();
+    }
+  };
+
+  const handlePageInputBlur = () => {
+    setPageInputValue(pdfStore.totalPages() > 0 ? `${pdfStore.currentPage() + 1}` : '');
+    setIsEditingPage(false);
   };
 
   return (
@@ -113,23 +157,51 @@ export const Toolbar: Component<Props> = (props) => {
           }}
           onKeyDown={handleZoomInputKeyDown}
           onBlur={handleZoomInputBlur}
+          onFocus={(event) => (event.target as HTMLInputElement).select()}
           style={{
-            width: '56px',
-            padding: '4px 6px',
+            width: '36px',
+            height: '36px',
+            padding: '0 2px',
             'text-align': 'center',
             'border-radius': '4px',
             border: '1px solid #555',
             color: '#fff',
-            background: '#1f1f21'
+            background: '#1f1f21',
+            'box-sizing': 'border-box'
           }}
           aria-label="Zoom percentage"
         />
         <span style={{ color: '#fff' }}>%</span>
         <button onClick={pdfStore.zoomIn}>+</button>
         
-        <span style={{ color: '#fff', margin: '0 16px' }}>
-          Page {pdfStore.currentPage() + 1} of {pdfStore.totalPages()}
-        </span>
+        <div style={{ display: 'flex', 'align-items': 'center', gap: '6px', color: '#fff', margin: '0 16px' }}>
+          <span>Page</span>
+          <input
+            type="text"
+            value={pageInputValue()}
+            onInput={(event) => {
+              setPageInputValue((event.target as HTMLInputElement).value);
+              setIsEditingPage(true);
+            }}
+            onKeyDown={handlePageInputKeyDown}
+            onBlur={handlePageInputBlur}
+            onFocus={(event) => (event.target as HTMLInputElement).select()}
+            disabled={pdfStore.totalPages() === 0}
+            style={{
+              width: '36px',
+              height: '36px',
+              padding: '0 2px',
+              'text-align': 'center',
+              'border-radius': '4px',
+              border: '1px solid #555',
+              color: '#fff',
+              background: '#1f1f21',
+              'box-sizing': 'border-box'
+            }}
+            aria-label="Current page"
+          />
+          <span>of {pdfStore.totalPages()}</span>
+        </div>
       </div>
       
       {/* Spacer */}
