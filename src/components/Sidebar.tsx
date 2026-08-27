@@ -5,6 +5,7 @@ import {
   buildTOCTree,
   collectCollapsibleNodeIds,
   findActiveTOCNodeId,
+  findTOCAncestorIds,
   filterTOCTree,
   type TOCNode,
 } from '../utils/tocTree';
@@ -107,6 +108,8 @@ export const Sidebar: Component<Props> = (props) => {
   const isDrawer = () => props.variant === 'drawer';
   const isVisible = () => isDrawer() ? props.open === true : pdfStore.sidebarVisible();
 
+  let tocListRef: HTMLDivElement | undefined;
+
   // Sidebar width state
   const [sidebarWidth, setSidebarWidth] = createSignal(getStoredSidebarWidth());
   const [isResizing, setIsResizing] = createSignal(false);
@@ -120,15 +123,79 @@ export const Sidebar: Component<Props> = (props) => {
   // Build hierarchical tree from flat TOC items
   const fullTree = createMemo(() => buildTOCTree(pdfStore.toc()));
 
-  // Auto-expand all collapsible nodes when a new book/TOC is loaded
+  // Active TOC node for current page
+  const activeNodeId = createMemo(() => findActiveTOCNodeId(fullTree(), pdfStore.currentPage()));
+
+  // Auto-expand only the current page's TOC branch when a new book/TOC is loaded initially
   createEffect(
     on(
       () => pdfStore.toc(),
       (items) => {
-        const tree = buildTOCTree(items);
-        const collapsibleIds = collectCollapsibleNodeIds(tree);
-        setExpandedNodes(collapsibleIds);
         setSearchQuery('');
+        if (!items || items.length === 0) {
+          setExpandedNodes(new Set<string>());
+          return;
+        }
+        const tree = buildTOCTree(items);
+        const activeId = findActiveTOCNodeId(tree, pdfStore.currentPage());
+        const ancestorIds = findTOCAncestorIds(tree, activeId);
+        setExpandedNodes(ancestorIds);
+      }
+    )
+  );
+
+  // Scroll active TOC item into view when active item changes or sidebar opens
+  const scrollToActiveItem = (center = false) => {
+    if (!tocListRef || !isVisible()) return;
+    requestAnimationFrame(() => {
+      const activeEl = tocListRef?.querySelector('.toc-item--active');
+      if (activeEl) {
+        activeEl.scrollIntoView({
+          block: center ? 'center' : 'nearest',
+          behavior: 'smooth',
+        });
+      }
+    });
+  };
+
+  // Reveal and highlight the current page's TOC item in the tree
+  const revealCurrentPageTOC = () => {
+    const activeId = activeNodeId();
+    if (!activeId) return;
+
+    if (searchQuery().trim().length > 0) {
+      setSearchQuery('');
+    }
+
+    const ancestorIds = findTOCAncestorIds(fullTree(), activeId);
+    setExpandedNodes((prev) => {
+      const next = new Set(prev);
+      for (const id of ancestorIds) {
+        next.add(id);
+      }
+      return next;
+    });
+
+    scrollToActiveItem(true);
+  };
+
+  createEffect(
+    on(
+      () => activeNodeId(),
+      () => {
+        scrollToActiveItem();
+      },
+      { defer: true }
+    )
+  );
+
+  createEffect(
+    on(
+      () => isVisible(),
+      (visible) => {
+        if (visible) {
+          scrollToActiveItem();
+        }
       }
     )
   );
@@ -137,9 +204,6 @@ export const Sidebar: Component<Props> = (props) => {
   const filteredData = createMemo(() => filterTOCTree(fullTree(), searchQuery()));
   const displayTree = () => filteredData().filtered;
   const matchingIds = () => filteredData().matchingIds;
-
-  // Active TOC node for current page
-  const activeNodeId = createMemo(() => findActiveTOCNodeId(fullTree(), pdfStore.currentPage()));
 
   // Check if a node is expanded (if searching, matching nodes are forced open)
   const isNodeExpanded = (id: string): boolean => {
@@ -256,6 +320,25 @@ export const Sidebar: Component<Props> = (props) => {
           </div>
 
           <div class="sidebar__actions">
+            <Show when={pdfStore.toc().length > 0 && !!activeNodeId()}>
+              <button
+                type="button"
+                class="sidebar__action-btn"
+                onClick={revealCurrentPageTOC}
+                title="Show current page in contents"
+                aria-label="Show current page in contents"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="2" x2="5" y1="12" y2="12" />
+                  <line x1="19" x2="22" y1="12" y2="12" />
+                  <line x1="12" x2="12" y1="2" y2="5" />
+                  <line x1="12" x2="12" y1="19" y2="22" />
+                  <circle cx="12" cy="12" r="7" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
+            </Show>
+
             <Show when={allCollapsibleIds().size > 0}>
               <button
                 type="button"
@@ -320,7 +403,7 @@ export const Sidebar: Component<Props> = (props) => {
           </div>
         </Show>
 
-        <div class="sidebar__toc-list">
+        <div class="sidebar__toc-list" ref={tocListRef}>
           <Show
             when={displayTree().length > 0}
             fallback={

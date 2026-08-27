@@ -62,6 +62,35 @@ export function collectCollapsibleNodeIds(nodes: TOCNode[]): Set<string> {
 }
 
 /**
+ * Finds all ancestor node IDs for a given target node ID in the TOC tree.
+ */
+export function findTOCAncestorIds(nodes: TOCNode[], targetId: string | null): Set<string> {
+  const ancestorIds = new Set<string>();
+  if (!targetId) return ancestorIds;
+
+  function findPath(nodeList: TOCNode[], currentPath: string[]): boolean {
+    for (const node of nodeList) {
+      if (node.id === targetId) {
+        for (const ancestorId of currentPath) {
+          ancestorIds.add(ancestorId);
+        }
+        return true;
+      }
+      if (node.children.length > 0) {
+        currentPath.push(node.id);
+        const found = findPath(node.children, currentPath);
+        currentPath.pop();
+        if (found) return true;
+      }
+    }
+    return false;
+  }
+
+  findPath(nodes, []);
+  return ancestorIds;
+}
+
+/**
  * Finds the TOC node that best corresponds to the current reading page.
  * Returns the node ID of the most specific section starting at or before currentPage.
  */
