@@ -1135,6 +1135,42 @@ button:active {
   flex: 1;
 }
 
+/* Reading Order / Segmented Toggle */
+.tts-segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.tts-segment-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tts-segment-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.tts-segment-btn--active {
+  background: linear-gradient(135deg, var(--app-accent), var(--app-accent-strong)) !important;
+  border-color: transparent !important;
+  color: #17110d !important;
+  font-weight: 700;
+}
+
 /* Margins Controls */
 .tts-section--margins {
   border-color: rgba(255, 255, 255, 0.05);

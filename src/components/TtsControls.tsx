@@ -7,6 +7,7 @@ import {
   Square,
   RotateCcw,
   Sparkles,
+  Columns2,
 } from 'lucide-solid';
 import { ttsStore, SPEED_PRESETS } from '../stores/ttsStore';
 import { VoiceCombobox } from './VoiceCombobox';
@@ -24,6 +25,9 @@ interface Props {
   onHeaderMarginChange?: (value: number) => void;
   onFooterMarginChange?: (value: number) => void;
   onResetMargins?: () => void;
+  columnMode?: number;
+  onColumnModeChange?: (value: number) => void;
+  onToggleColumnMode?: () => void;
 }
 
 export const TtsControls: Component<Props> = (props) => {
@@ -171,6 +175,54 @@ export const TtsControls: Component<Props> = (props) => {
           />
         </div>
       </div>
+
+      {/* Text Reading Order / Column Mode Section */}
+      <Show when={props.columnMode !== undefined}>
+        <div class="tts-section">
+          <div class="tts-section__header">
+            <span class="tts-section__title">
+              <Columns2 size={14} class="tts-icon-accent" />
+              Text Reading Order
+            </span>
+            <span class="tts-section__value">
+              {props.columnMode === 2 ? '2 Columns' : '1 Column'}
+            </span>
+          </div>
+          <div class="tts-hint">
+            Reading layout for multi-column pages.
+          </div>
+          <div class="tts-segmented-control">
+            <button
+              type="button"
+              class={`tts-segment-btn ${props.columnMode === 1 ? 'tts-segment-btn--active' : ''}`}
+              onClick={() => {
+                if (props.onColumnModeChange) {
+                  props.onColumnModeChange(1);
+                } else if (props.onToggleColumnMode && props.columnMode !== 1) {
+                  props.onToggleColumnMode();
+                }
+              }}
+              aria-pressed={props.columnMode === 1}
+            >
+              1 Column
+            </button>
+            <button
+              type="button"
+              class={`tts-segment-btn ${props.columnMode === 2 ? 'tts-segment-btn--active' : ''}`}
+              onClick={() => {
+                if (props.onColumnModeChange) {
+                  props.onColumnModeChange(2);
+                } else if (props.onToggleColumnMode && props.columnMode !== 2) {
+                  props.onToggleColumnMode();
+                }
+              }}
+              aria-pressed={props.columnMode === 2}
+            >
+              2 Columns
+            </button>
+          </div>
+        </div>
+      </Show>
 
       {/* Exclude Margins Section (if handlers provided) */}
       <Show when={props.headerMargin !== undefined && props.footerMargin !== undefined}>

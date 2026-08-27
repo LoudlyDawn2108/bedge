@@ -182,16 +182,11 @@ export const MobileReaderChrome: Component<Props> = (props) => {
             </div>
 
             <div class="mobile-settings-group">
-              <div class="mobile-settings-group__label">Text order</div>
-              <button class="mobile-wide-button" onClick={props.onToggleColumnMode}>
-                {props.columnMode === 1 ? 'Single column' : 'Two columns'}
-              </button>
-            </div>
-
-            <div class="mobile-settings-group">
               <div class="mobile-settings-group__label">Speech & Audio</div>
               <TtsControls
                 compact
+                columnMode={props.columnMode}
+                onToggleColumnMode={props.onToggleColumnMode}
                 headerMargin={props.headerMargin}
                 footerMargin={props.footerMargin}
                 onHeaderMarginChange={props.onHeaderMarginChange}

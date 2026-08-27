@@ -137,11 +137,6 @@ export const Toolbar: Component<Props> = (props) => {
       <button onClick={props.onOpenFile}>Open PDF</button>
       <button onClick={pdfStore.toggleSidebar}>☰ TOC</button>
       
-      {/* Column mode toggle */}
-      <button onClick={() => readingSession.setColumnMode(readingSession.columnMode() === 1 ? 2 : 1)}>
-        {readingSession.columnMode() === 1 ? '📄 1-Col' : '📑 2-Col'}
-      </button>
-      
       {/* Spacer */}
       <div style={{ flex: 1 }} />
       
@@ -236,6 +231,9 @@ export const Toolbar: Component<Props> = (props) => {
             </div>
 
             <TtsControls
+              columnMode={readingSession.columnMode()}
+              onColumnModeChange={readingSession.setColumnMode}
+              onToggleColumnMode={() => readingSession.setColumnMode(readingSession.columnMode() === 1 ? 2 : 1)}
               headerMargin={readingSession.headerMargin()}
               footerMargin={readingSession.footerMargin()}
               onHeaderMarginChange={readingSession.setHeaderMargin}
