@@ -39,6 +39,7 @@ interface RenderedPageSize {
 interface VisibleRange {
   firstVisible: number;
   lastVisible: number;
+  mostVisible: number;
   start: number;
   end: number;
 }
@@ -818,7 +819,7 @@ export const PDFViewer: Component<Props> = (props) => {
   function computeVisibleRange(scrollTop: number, viewHeight: number): VisibleRange {
     const totalPages = pdfStore.totalPages();
     if (totalPages <= 0) {
-      return { firstVisible: -1, lastVisible: -1, start: 0, end: 0 };
+      return { firstVisible: -1, lastVisible: -1, mostVisible: -1, start: 0, end: 0 };
     }
 
     const visibleTop = scrollTop + getReaderTopInset();
@@ -828,6 +829,8 @@ export const PDFViewer: Component<Props> = (props) => {
     let currentTop = getReaderTopSpacing();
     let firstVisible = -1;
     let lastVisible = -1;
+    let mostVisible = -1;
+    let maxVisibleHeight = -1;
 
     for (let i = 0; i < totalPages; i++) {
       const pageHeight = getPageHeight(i, sizes);
@@ -836,6 +839,12 @@ export const PDFViewer: Component<Props> = (props) => {
       if (pageBottom > visibleTop && currentTop < scrollBottom) {
         if (firstVisible === -1) firstVisible = i;
         lastVisible = i;
+
+        const visiblePageHeight = Math.min(pageBottom, scrollBottom) - Math.max(currentTop, visibleTop);
+        if (visiblePageHeight > maxVisibleHeight) {
+          maxVisibleHeight = visiblePageHeight;
+          mostVisible = i;
+        }
       }
 
       currentTop = pageBottom + PAGE_GAP;
@@ -844,11 +853,13 @@ export const PDFViewer: Component<Props> = (props) => {
     if (firstVisible === -1) {
       firstVisible = Math.max(0, Math.min(pdfStore.currentPage(), totalPages - 1));
       lastVisible = firstVisible;
+      mostVisible = firstVisible;
     }
 
     return {
       firstVisible,
       lastVisible,
+      mostVisible,
       start: Math.max(0, firstVisible - PAGES_PER_BATCH),
       end: Math.min(totalPages, lastVisible + PAGES_PER_BATCH + 1),
     };
@@ -1130,7 +1141,7 @@ export const PDFViewer: Component<Props> = (props) => {
   createEffect(on(
     () => visibleRange(),
     (range) => {
-      if (range.firstVisible < 0) return;
+      if (range.firstVisible < 0 || range.mostVisible < 0) return;
       for (let pageNum = range.start; pageNum < range.end; pageNum++) {
         void documentSession.ensurePageMetrics(pageNum).catch(error => {
           console.error(`Failed to warm metrics for page ${pageNum}:`, error);
@@ -1138,14 +1149,14 @@ export const PDFViewer: Component<Props> = (props) => {
         loadPageLinks(pageNum);
       }
 
-      const offsetY = getPageOffsetY(range.firstVisible, viewport().scrollTop);
+      const offsetY = getPageOffsetY(range.mostVisible, viewport().scrollTop);
       const previousPage = pdfStore.currentPage();
 
       if (isInitialRevealHidden() || pdfStore.navigateToPage() !== null) return;
 
-      pdfStore.setCurrentViewportPosition(range.firstVisible, offsetY);
-      if (previousPage !== range.firstVisible) {
-        props.onPageChange?.(range.firstVisible);
+      pdfStore.setCurrentViewportPosition(range.mostVisible, offsetY);
+      if (previousPage !== range.mostVisible) {
+        props.onPageChange?.(range.mostVisible);
       }
     },
     { defer: true }
