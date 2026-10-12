@@ -9,7 +9,8 @@ function registerServiceWorker(): void {
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    const swUrl = `${import.meta.env.BASE_URL}sw.js`
+    navigator.serviceWorker.register(swUrl, { scope: import.meta.env.BASE_URL })
       .then((registration) => {
         console.log('Service Worker registered:', registration)
       })
